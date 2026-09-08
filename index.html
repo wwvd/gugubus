@@ -31,7 +31,7 @@
   <header class="mushroom-gradient text-amber-50 p-4 shadow-lg sticky top-0 z-50 rounded-b-2xl">
     <div class="max-w-3xl mx-auto flex justify-between items-center">
       <div class="flex items-center space-x-2">
-        <button id="backBtn" class="hidden text-sm bg-[#5C3627]/45 hover:bg-[#5C3627]/60 text-amber-100 px-3 py-1.5 rounded-full transition-all border border-amber-200/30 flex items-center gap-1 shadow-sm" onclick="showRouteList()">
+        <button id="backBtn" class="hidden text-sm bg-[#5C3627]/40 hover:bg-[#5C3627]/60 text-amber-100 px-3 py-1.5 rounded-full transition-all border border-amber-200/30 flex items-center gap-1 shadow-sm" onclick="showRouteList()">
           <span>🍄</span>
           <span>返回路線</span>
         </button>
@@ -63,6 +63,7 @@
         請選擇下方車站
       </div>
       
+      <!-- ETA Badges Container -->
       <div id="etaContainer" class="mt-3 flex flex-wrap gap-2.5"></div>
     </div>
 
@@ -75,23 +76,16 @@
         <button onclick="setCompanyFilter('CTB')" id="filterCtb" class="px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#F0E6D8] text-[#7A6251] hover:bg-[#E2D2C0] transition">城巴</button>
       </div>
 
-      <!-- Live Status & Debug -->
-      <div id="statusTag" class="text-xs font-bold text-[#8C6D58] flex items-center justify-between bg-[#FDF5EB] p-2 rounded-lg border border-[#EADBC8]">
-        <span id="statusText">🍄 系統就緒</span>
-        <span id="debugCount" class="text-[#B36B4D]">就緒</span>
+      <!-- Live Load Status -->
+      <div id="statusTag" class="text-xs font-bold text-[#8C6D58] flex items-center justify-between">
+        <span id="statusText">🍄 菇菇熱門路線已就緒！</span>
       </div>
 
-      <!-- Search Input & Button -->
-      <div class="flex gap-2">
-        <input type="text" id="searchInput" 
-          oninput="filterRoutes()" 
-          onkeydown="if(event.key === 'Enter') filterRoutes()" 
-          placeholder="搜尋路線或地名 (例如 1, 1A, 101, 118, 960, 觀塘)..." 
+      <!-- Search Input -->
+      <div class="relative">
+        <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線或地名 (例如 1, 1A, 101, 118, 960, 觀塘, 屯門)..." 
           class="w-full px-4 py-2.5 bg-[#FAF6F0] border-2 border-[#E2D2C0] rounded-xl focus:outline-none focus:border-[#8C533E] focus:bg-white text-sm font-semibold text-[#4A3B32] placeholder-[#A8988B] transition">
-        <button onclick="filterRoutes()" class="bg-[#8C533E] hover:bg-[#72412E] text-amber-50 px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex-shrink-0 flex items-center gap-1">
-          <span>🔍</span>
-          <span>搜尋</span>
-        </button>
+        <span class="absolute right-3.5 top-2.5 text-base">🔍</span>
       </div>
     </div>
 
@@ -113,16 +107,8 @@
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
 
-    function safeStr(val, defaultVal = '') {
-      if (val === null || val === undefined) return defaultVal;
-      return String(val).trim();
-    }
-
-    function cleanStr(str) {
-      return safeStr(str).replace(/[\s\(\)\（\）\-\–\.]/g, '').toUpperCase();
-    }
-
-    const BUILTIN_ROUTES = [
+    // 原始乾淨的熱門路線資料庫
+    const ROUTES_DB = [
       { company: 'KMB', companyName: '九巴/龍運', route: '1', orig: '竹園邨', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
       { company: 'KMB', companyName: '九巴/龍運', route: '1A', orig: '中秀茂坪', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
       { company: 'KMB', companyName: '九巴/龍運', route: '2X', orig: '彩福', dest: '美孚', bound: 'outbound', serviceType: '1' },
@@ -187,16 +173,8 @@
       { company: 'KMB', companyName: '九巴/龍運', route: '968', orig: '元朗(西)', dest: '銅鑼灣(天后)', bound: 'outbound', serviceType: '1' }
     ];
 
-    let allRoutes = [...BUILTIN_ROUTES];
     let selectedCompanyFilter = 'ALL';
     let currentSelectedRoute = null;
-
-    function updateStatus(msg, countText) {
-      const elText = document.getElementById('statusText');
-      const elCount = document.getElementById('debugCount');
-      if (elText) elText.textContent = msg;
-      if (elCount && countText) elCount.textContent = countText;
-    }
 
     function showLoading(isLoading) {
       const loader = document.getElementById('loading');
@@ -206,75 +184,9 @@
       }
     }
 
-    async function fetchWithTimeout(url, timeoutMs = 6000) {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timer);
-        if (!response || !response.ok) return null;
-        return await response.json();
-      } catch (e) {
-        return null;
-      }
-    }
-
     function initApp() {
-      updateStatus("🍄 內建路線庫就緒", `${allRoutes.length} 條路線`);
       filterRoutes();
       showLoading(false);
-      setTimeout(syncLiveRoutes, 500);
-    }
-
-    async function syncLiveRoutes() {
-      try {
-        const [kmbRes, ctbRes] = await Promise.all([
-          fetchWithTimeout(`${KMB_BASE}/route`, 8000),
-          fetchWithTimeout(`${CTB_BASE}/route/ctb`, 8000)
-        ]);
-
-        let liveList = [];
-
-        if (kmbRes && Array.isArray(kmbRes.data)) {
-          kmbRes.data.forEach(r => {
-            const rName = safeStr(r.route).toUpperCase();
-            if (!rName) return;
-            liveList.push({
-              company: 'KMB',
-              companyName: '九巴/龍運',
-              route: rName,
-              orig: safeStr(r.orig_tc || r.origTc, '起點'),
-              dest: safeStr(r.dest_tc || r.destTc, '終點'),
-              bound: safeStr(r.bound, 'O').toUpperCase() === 'I' ? 'inbound' : 'outbound',
-              serviceType: safeStr(r.service_type, '1')
-            });
-          });
-        }
-
-        if (ctbRes && Array.isArray(ctbRes.data)) {
-          ctbRes.data.forEach(r => {
-            const rName = safeStr(r.route).toUpperCase();
-            if (!rName) return;
-            liveList.push({
-              company: 'CTB',
-              companyName: '城巴',
-              route: rName,
-              orig: safeStr(r.orig_tc || r.origTc, '起點'),
-              dest: safeStr(r.dest_tc || r.destTc, '終點'),
-              bound: 'outbound',
-              serviceType: '1'
-            });
-          });
-        }
-
-        if (liveList.length > 50) {
-          allRoutes = liveList;
-          filterRoutes();
-          updateStatus("🍄 全港最新路線已同步", `${allRoutes.length} 條`);
-        }
-      } catch (err) {
-        console.error("Background sync notice:", err);
-      }
     }
 
     function getCompanyBadgeStyle(code) {
@@ -285,22 +197,21 @@
       }
     }
 
-    function renderRoutes(routes, totalMatches = 0) {
+    function renderRoutes(routes) {
       const container = document.getElementById('routeListView');
       if (!container) return;
       container.innerHTML = '';
 
-      if (!routes || !Array.isArray(routes) || routes.length === 0) {
+      if (!routes || routes.length === 0) {
         container.innerHTML = `
           <div class="text-center py-10 bg-[#FFFDF9] rounded-2xl border border-[#EADBC8] p-6">
             <span class="text-3xl block mb-2">🍄💧</span>
-            <p class="text-[#8C6D58] font-bold">找不到相關路線喔～Try 搜尋其他號碼或地名吧！</p>
+            <p class="text-[#8C6D58] font-bold">找不到相關路線喔～換個關鍵字搜尋看看吧！</p>
           </div>`;
         return;
       }
 
       routes.forEach(r => {
-        if (!r || !r.route) return;
         const card = document.createElement('div');
         card.className = "bg-[#FFFDF9] hover:bg-[#FDF9F3] p-4 rounded-2xl shadow-sm border border-[#EADBC8] hover:border-[#D8C4B0] hover:shadow-md transition-all cursor-pointer flex justify-between items-center group transform hover:-translate-y-0.5";
         card.onclick = () => selectRoute(r);
@@ -310,7 +221,7 @@
         card.innerHTML = `
           <div class="flex items-center space-x-2">
             <span class="px-2 py-0.5 rounded-lg font-black text-[11px] ${badgeStyle} shadow-sm">
-              ${r.companyName || r.company}
+              ${r.companyName}
             </span>
             <span class="text-xl font-black text-[#4A3B32] group-hover:text-[#8C533E] transition pl-1">${r.route}</span>
           </div>
@@ -322,61 +233,141 @@
         `;
         container.appendChild(card);
       });
-
-      updateStatus("🍄 搜尋結果正常", `顯示 ${routes.length} / 符合 ${totalMatches}`);
     }
 
     function filterRoutes() {
+      const query = document.getElementById('searchInput').value.trim().toUpperCase();
+
+      const filtered = ROUTES_DB.filter(r => {
+        const matchesCompany = selectedCompanyFilter === 'ALL' || r.company === selectedCompanyFilter;
+        if (!matchesCompany) return false;
+
+        if (!query) return true;
+
+        return r.route.toUpperCase().includes(query) ||
+               r.orig.toUpperCase().includes(query) ||
+               r.dest.toUpperCase().includes(query);
+      });
+
+      renderRoutes(filtered);
+    }
+
+    function setCompanyFilter(company) {
+      selectedCompanyFilter = company;
+      ['All', 'Kmb', 'Ctb'].forEach(type => {
+        const btn = document.getElementById(`filter${type}`);
+        if (btn) {
+          if (type.toUpperCase() === company || (type === 'All' && company === 'ALL')) {
+            btn.className = "px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#8C533E] text-amber-50 shadow-sm transition";
+          } else {
+            btn.className = "px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#F0E6D8] text-[#7A6251] hover:bg-[#E2D2C0] transition";
+          }
+        }
+      });
+      filterRoutes();
+    }
+
+    async function selectRoute(route) {
+      currentSelectedRoute = JSON.parse(JSON.stringify(route));
+
+      document.getElementById('routeListView')?.classList.add('hidden');
+      document.getElementById('searchSection')?.classList.add('hidden');
+      document.getElementById('backBtn')?.classList.remove('hidden');
+      
+      const appTitle = document.getElementById('appTitle');
+      if (appTitle) appTitle.innerHTML = `<span>🍄</span><span>${route.companyName} ${route.route} 車站列表</span>`;
+
+      const infoCard = document.getElementById('infoCard');
+      if (infoCard) infoCard.classList.remove('hidden');
+
+      const badgeStyle = getCompanyBadgeStyle(route.company);
+      const header = document.getElementById('selectedRouteHeader');
+      if (header) {
+        header.innerHTML = `
+          <div class="flex items-center gap-1.5">
+            <span class="px-2 py-0.5 rounded-lg font-black text-xs ${badgeStyle}">
+              ${route.companyName}
+            </span>
+            <span class="text-xl font-black text-[#4A3B32]">${route.route}</span>
+          </div>
+        `;
+      }
+
+      const dir = document.getElementById('selectedRouteDir');
+      if (dir) dir.textContent = `${route.orig} ➔ ${route.dest}`;
+
+      const stopInfo = document.getElementById('selectedStopInfo');
+      if (stopInfo) stopInfo.innerHTML = `<span>🍄</span><span>請選擇下方車站查看實時到站時間</span>`;
+
+      const etaBox = document.getElementById('etaContainer');
+      if (etaBox) etaBox.innerHTML = "";
+
+      showLoading(true);
+      document.getElementById('stopListView')?.classList.add('hidden');
+
       try {
-        const inputEl = document.getElementById('searchInput');
-        const rawQuery = safeStr(inputEl ? inputEl.value : '');
-        const cleanQuery = cleanStr(rawQuery);
+        let stopsRaw = [];
 
-        let source = Array.isArray(allRoutes) && allRoutes.length > 0 ? allRoutes : BUILTIN_ROUTES;
-
-        if (!cleanQuery) {
-          const filtered = source.filter(r => 
-            r && (selectedCompanyFilter === 'ALL' || r.company === selectedCompanyFilter)
-          );
-          renderRoutes(filtered.slice(0, 60), filtered.length);
-          return;
+        if (route.company === 'KMB') {
+          const bound = route.bound === 'inbound' ? 'inbound' : 'outbound';
+          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${bound}/${route.serviceType || '1'}`);
+          const data = await res.json();
+          stopsRaw = data.data || [];
+        } else if (route.company === 'CTB') {
+          const res = await fetch(`${CTB_BASE}/route-stop/ctb/${route.route}/outbound`);
+          const data = await res.json();
+          stopsRaw = data.data || [];
         }
 
-        const matches = [];
+        if (stopsRaw.length === 0) {
+          stopsRaw.push({ seq: 1, stop: 'DEFAULT' });
+        }
 
-        source.forEach(r => {
-          if (!r || !r.route) return;
-          const matchesCompany = selectedCompanyFilter === 'ALL' || r.company === selectedCompanyFilter;
-          if (!matchesCompany) return;
-
-          const routeClean = cleanStr(r.route);
-          const origClean = cleanStr(r.orig);
-          const destClean = cleanStr(r.dest);
-
-          let score = 0;
-
-          if (routeClean === cleanQuery) {
-            score = 100;
-          } else if (routeClean.indexOf(cleanQuery) === 0) {
-            score = 80;
-          } else if (routeClean.indexOf(cleanQuery) !== -1) {
-            score = 60;
-          } else if (origClean.indexOf(cleanQuery) !== -1 || destClean.indexOf(cleanQuery) !== -1) {
-            score = 40;
+        const stopPromises = stopsRaw.map(async (s, idx) => {
+          let name = `巴士站 ${s.seq || idx + 1}`;
+          if (s.stop && s.stop !== 'DEFAULT') {
+            const apiBase = route.company === 'KMB' ? KMB_BASE : CTB_BASE;
+            try {
+              const stopRes = await fetch(`${apiBase}/stop/${s.stop}`);
+              const stopData = await stopRes.json();
+              if (stopData && stopData.data && stopData.data.name_tc) {
+                name = stopData.data.name_tc;
+              }
+            } catch (e) {}
           }
-
-          if (score > 0) {
-            matches.push({ routeObj: r, score: score });
-          }
+          return {
+            seq: s.seq || (idx + 1),
+            name: name,
+            stopId: s.stop
+          };
         });
 
-        matches.sort((a, b) => {
-          if (b.score !== a.score) return b.score - a.score;
-          const lenA = a.routeObj.route ? a.routeObj.route.length : 0;
-          const lenB = b.routeObj.route ? b.routeObj.route.length : 0;
-          if (lenA !== lenB) return lenA - lenB;
-          return safeStr(a.routeObj.route).localeCompare(safeStr(b.routeObj.route));
-        });
+        const stops = (await Promise.all(stopPromises)).sort((a, b) => a.seq - b.seq);
+        renderStops(stops);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        showLoading(false);
+      }
+    }
 
-        const sortedRoutes = matches.map(m => m.routeObj);
-        renderRoutes(sortedRoutes.slice(0, 60), sortedRoutes.length
+    function toggleDirection() {
+      if (!currentSelectedRoute) return;
+      currentSelectedRoute.bound = currentSelectedRoute.bound === 'inbound' ? 'outbound' : 'inbound';
+      const temp = currentSelectedRoute.orig;
+      currentSelectedRoute.orig = currentSelectedRoute.dest;
+      currentSelectedRoute.dest = temp;
+      selectRoute(currentSelectedRoute);
+    }
+
+    function renderStops(stops) {
+      const container = document.getElementById('stopListView');
+      if (!container) return;
+      container.innerHTML = '';
+      container.classList.remove('hidden');
+
+      stops.forEach(s => {
+        const card = document.createElement('div');
+        card.id = `stop-card-${s.seq}`;
+        card.className = "bg-[#FFFDF9] p-3.5 rounded-2xl shadow-sm border border-[#EADBC8] hover:border-[#B36B4D] transition-all cursor-pointer flex items-center space-x-3 group";
+        card.onclick = 
