@@ -72,6 +72,7 @@
     let selectedCompanyFilter = 'ALL';
     let currentSelectedRoute = null;
     let currentSelectedStop = null;
+    let etaTimer = null;
 
     // Initialization
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -105,16 +106,12 @@
         const combined = [...kmbRoutes, ...ctbRoutes];
         const routeMap = new Map();
 
-        // Group joint-operated routes (same route number AND same endpoints) together,
-        // while keeping routes with the same number but different endpoints separate.
         combined.forEach(r => {
           if (!r.route || !r.origTc || !r.destTc) return;
           const routeNum = r.route.toUpperCase();
           
-          // Create a direction-agnostic endpoint signature to group joint routes properly
           const sortedEnds = [r.origTc.trim(), r.destTc.trim()].sort();
           const endpointSig = `${sortedEnds[0]}_${sortedEnds[1]}`;
-          
           const mapKey = `${routeNum}__${endpointSig}`;
 
           if (!routeMap.has(mapKey)) {
@@ -217,6 +214,8 @@
     }
 
     async function selectRoute(mergedRoute) {
+      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+
       const defaultCompany = mergedRoute.companies.includes('KMB') ? 'KMB' : mergedRoute.companies[0];
       const defaultVariant = mergedRoute.variants.find(v => v.company === defaultCompany) || mergedRoute.variants[0];
 
@@ -275,6 +274,7 @@
 
     function switchCompany(company) {
       if (!currentSelectedRoute || currentSelectedRoute.activeCompany === company) return;
+      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
       
       currentSelectedRoute.activeCompany = company;
       const variant = currentSelectedRoute.variants.find(v => v.company === company) || currentSelectedRoute.variants[0];
@@ -292,6 +292,7 @@
 
     function toggleDirection() {
       if (!currentSelectedRoute) return;
+      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
 
       const companyVariants = currentSelectedRoute.variants.filter(v => v.company === currentSelectedRoute.activeCompany);
       const currentBound = currentSelectedRoute.bound.toLowerCase();
@@ -367,7 +368,7 @@
         const card = document.createElement('div');
         card.id = `stop-card-${s.stopId}`;
         card.className = "bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 hover:border-blue-300 transition cursor-pointer flex items-center space-x-3";
-        card.onclick = () => fetchETA(s);
+        card.onclick = () => fetchETA(s, false);
 
         card.innerHTML = `
           <div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs flex-shrink-0">
@@ -379,76 +380,101 @@
       });
     }
 
-    async function fetchETA(stop) {
+    async function fetchETA(stop, isSilent = false) {
       currentSelectedStop = stop;
 
-      document.querySelectorAll('#stopListView > div').forEach(el => el.classList.remove('border-blue-500', 'bg-blue-50'));
-      const activeCard = document.getElementById(`stop-card-${stop.stopId}`);
-      if (activeCard) activeCard.classList.add('border-blue-500', 'bg-blue-50');
+      if (!isSilent) {
+        if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
+        document.querySelectorAll('#stopListView > div').forEach(el => el.classList.remove('border-blue-500', 'bg-blue-50'));
+        const activeCard = document.getElementById(`stop-card-${stop.stopId}`);
+        if (activeCard) activeCard.classList.add('border-blue-500', 'bg-blue-50');
 
-      document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
-      const etaContainer = document.getElementById('etaContainer');
-      etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
+        document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
+        const etaContainer = document.getElementById('etaContainer');
+        etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
+      }
 
       try {
-        let etaData = [];
-        if (currentSelectedRoute.activeCompany === 'KMB') {
-          const res = await fetch(`${KMB_BASE}/eta/${stop.stopId}/${currentSelectedRoute.route}/${currentSelectedRoute.serviceType}`).then(r => r.json());
-          etaData = res.data || [];
-        } else {
-          const res = await fetch(`${CTB_BASE}/eta/ctb/${stop.stopId}/${currentSelectedRoute.route}`).then(r => r.json());
-          etaData = res.data || [];
-        }
+        let allEtas = [];
+        const isJointRoute = currentSelectedRoute.companies.length > 1;
+        const targetCompanies = isJointRoute ? currentSelectedRoute.companies : [currentSelectedRoute.activeCompany];
 
-        const now = new Date();
-        const nextThree = etaData
-          .filter(item => item.eta)
-          .map(item => {
-            const etaDate = new Date(item.eta);
-            const diffMin = Math.round((etaDate - now) / 60000);
-            if (diffMin < 0) return null;
+        const promises = targetCompanies.map(async (co) => {
+          try {
+            let etaData = [];
+            if (co === 'KMB') {
+              const kmbVariant = currentSelectedRoute.variants.find(v => v.company === 'KMB') || { serviceType: currentSelectedRoute.serviceType || '1' };
+              const res = await fetch(`${KMB_BASE}/eta/${stop.stopId}/${currentSelectedRoute.route}/${kmbVariant.serviceType}`).then(r => r.json());
+              etaData = res.data || [];
+            } else if (co === 'CTB') {
+              const res = await fetch(`${CTB_BASE}/eta/ctb/${stop.stopId}/${currentSelectedRoute.route}`).then(r => r.json());
+              etaData = res.data || [];
+            }
 
-            const hh = String(etaDate.getHours()).padStart(2, '0');
-            const mm = String(etaDate.getMinutes()).padStart(2, '0');
-            const exactTime = `${hh}:${mm}`;
+            const now = new Date();
+            return etaData
+              .filter(item => item.eta)
+              .map(item => {
+                const etaDate = new Date(item.eta);
+                const diffMin = Math.round((etaDate - now) / 60000);
+                if (diffMin < 0) return null;
 
-            return { mins: diffMin, exactTime };
-          })
-          .filter(item => item !== null)
-          .sort((a, b) => a.mins - b.mins)
-          .slice(0, 3);
+                const hh = String(etaDate.getHours()).padStart(2, '0');
+                const mm = String(etaDate.getMinutes()).padStart(2, '0');
+                const exactTime = `${hh}:${mm}`;
 
+                return { company: co, mins: diffMin, exactTime };
+              })
+              .filter(item => item !== null);
+          } catch (err) {
+            return [];
+          }
+        });
+
+        const results = await Promise.all(promises);
+        results.forEach(arr => allEtas.push(...arr));
+
+        allEtas.sort((a, b) => a.mins - b.mins);
+        const nextETAs = allEtas.slice(0, 4);
+
+        const etaContainer = document.getElementById('etaContainer');
         etaContainer.innerHTML = '';
-        if (nextThree.length === 0) {
+
+        if (nextETAs.length === 0) {
           etaContainer.innerHTML = `<span class="text-sm text-red-500 font-medium">暫無即時班次資料</span>`;
         } else {
-          nextThree.forEach((item, idx) => {
+          nextETAs.forEach((item, idx) => {
             const badge = document.createElement('div');
-            badge.className = "bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg shadow-sm";
+            badge.className = "bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg shadow-sm flex items-center space-x-2";
+            
             const durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
-            badge.textContent = `第 ${idx + 1} 班: ${durationLabel} (${item.exactTime})`;
+            
+            let companyBadgeHtml = '';
+            if (isJointRoute) {
+              const coBg = item.company === 'KMB' ? 'bg-red-700 text-white' : 'bg-yellow-500 text-black';
+              const coName = item.company === 'KMB' ? '九巴' : '城巴';
+              companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
+            }
+
+            badge.innerHTML = `
+              <div class="flex items-center space-x-1.5">
+                ${companyBadgeHtml}
+                <span>第 ${idx + 1} 班: ${durationLabel} (${item.exactTime})</span>
+              </div>
+            `;
             etaContainer.appendChild(badge);
           });
         }
+
+        // Set up 30-second auto refresh interval if not already running
+        if (!isSilent && !etaTimer) {
+          etaTimer = setInterval(() => {
+            if (currentSelectedStop) {
+              fetchETA(currentSelectedStop, true);
+            }
+          }, 30000);
+        }
+
       } catch (err) {
-        etaContainer.innerHTML = `<span class="text-sm text-red-500">無法獲取實時數據</span>`;
-      }
-    }
-
-    function showRouteList() {
-      document.getElementById('routeListView').classList.remove('hidden');
-      document.getElementById('searchSection').classList.remove('hidden');
-      document.getElementById('stopListView').classList.add('hidden');
-      document.getElementById('infoCard').classList.add('hidden');
-      document.getElementById('backBtn').classList.add('hidden');
-      document.getElementById('appTitle').textContent = "Gugubus 菇專用香港巴士實時到站查詢";
-    }
-
-    function showLoading(isLoading) {
-      const loader = document.getElementById('loading');
-      if (isLoading) loader.classList.remove('hidden');
-      else loader.classList.add('hidden');
-    }
-  </script>
-</body>
-</html>
+        if (!isSilent) {
+          document.getElementById('etaContainer').innerHTML = `<span class="text-sm text-red-500">無
