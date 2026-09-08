@@ -72,7 +72,6 @@
     let selectedCompanyFilter = 'ALL';
     let currentSelectedRoute = null;
     let currentSelectedStop = null;
-    let etaTimer = null;
 
     // Initialization
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -214,8 +213,6 @@
     }
 
     async function selectRoute(mergedRoute) {
-      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
-
       const defaultCompany = mergedRoute.companies.includes('KMB') ? 'KMB' : mergedRoute.companies[0];
       const defaultVariant = mergedRoute.variants.find(v => v.company === defaultCompany) || mergedRoute.variants[0];
 
@@ -274,7 +271,6 @@
 
     function switchCompany(company) {
       if (!currentSelectedRoute || currentSelectedRoute.activeCompany === company) return;
-      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
       
       currentSelectedRoute.activeCompany = company;
       const variant = currentSelectedRoute.variants.find(v => v.company === company) || currentSelectedRoute.variants[0];
@@ -292,7 +288,6 @@
 
     function toggleDirection() {
       if (!currentSelectedRoute) return;
-      if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
 
       const companyVariants = currentSelectedRoute.variants.filter(v => v.company === currentSelectedRoute.activeCompany);
       const currentBound = currentSelectedRoute.bound.toLowerCase();
@@ -368,7 +363,7 @@
         const card = document.createElement('div');
         card.id = `stop-card-${s.stopId}`;
         card.className = "bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 hover:border-blue-300 transition cursor-pointer flex items-center space-x-3";
-        card.onclick = () => fetchETA(s, false);
+        card.onclick = () => fetchETA(s);
 
         card.innerHTML = `
           <div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs flex-shrink-0">
@@ -380,19 +375,16 @@
       });
     }
 
-    async function fetchETA(stop, isSilent = false) {
+    async function fetchETA(stop) {
       currentSelectedStop = stop;
 
-      if (!isSilent) {
-        if (etaTimer) { clearInterval(etaTimer); etaTimer = null; }
-        document.querySelectorAll('#stopListView > div').forEach(el => el.classList.remove('border-blue-500', 'bg-blue-50'));
-        const activeCard = document.getElementById(`stop-card-${stop.stopId}`);
-        if (activeCard) activeCard.classList.add('border-blue-500', 'bg-blue-50');
+      document.querySelectorAll('#stopListView > div').forEach(el => el.classList.remove('border-blue-500', 'bg-blue-50'));
+      const activeCard = document.getElementById(`stop-card-${stop.stopId}`);
+      if (activeCard) activeCard.classList.add('border-blue-500', 'bg-blue-50');
 
-        document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
-        const etaContainer = document.getElementById('etaContainer');
-        etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
-      }
+      document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
+      const etaContainer = document.getElementById('etaContainer');
+      etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
 
       try {
         let allEtas = [];
@@ -437,7 +429,6 @@
         allEtas.sort((a, b) => a.mins - b.mins);
         const nextETAs = allEtas.slice(0, 4);
 
-        const etaContainer = document.getElementById('etaContainer');
         etaContainer.innerHTML = '';
 
         if (nextETAs.length === 0) {
@@ -465,16 +456,25 @@
             etaContainer.appendChild(badge);
           });
         }
-
-        // Set up 30-second auto refresh interval if not already running
-        if (!isSilent && !etaTimer) {
-          etaTimer = setInterval(() => {
-            if (currentSelectedStop) {
-              fetchETA(currentSelectedStop, true);
-            }
-          }, 30000);
-        }
-
       } catch (err) {
-        if (!isSilent) {
-          document.getElementById('etaContainer').innerHTML = `<span class="text-sm text-red-500">無
+        etaContainer.innerHTML = `<span class="text-sm text-red-500">無法獲取實時數據</span>`;
+      }
+    }
+
+    function showRouteList() {
+      document.getElementById('routeListView').classList.remove('hidden');
+      document.getElementById('searchSection').classList.remove('hidden');
+      document.getElementById('stopListView').classList.add('hidden');
+      document.getElementById('infoCard').classList.add('hidden');
+      document.getElementById('backBtn').classList.add('hidden');
+      document.getElementById('appTitle').textContent = "Gugubus 菇專用香港巴士實時到站查詢";
+    }
+
+    function showLoading(isLoading) {
+      const loader = document.getElementById('loading');
+      if (isLoading) loader.classList.remove('hidden');
+      else loader.classList.add('hidden');
+    }
+  </script>
+</body>
+</html>
