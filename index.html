@@ -46,7 +46,7 @@
         <button onclick="setCompanyFilter('CTB')" id="filterCtb" class="px-3 py-1 rounded-full text-sm font-medium bg-gray-200 text-gray-700">城巴 CTB</button>
       </div>
       <!-- Search Input -->
-      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1A, 102, 960)..." 
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 102, 960)..." 
         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
 
@@ -102,26 +102,32 @@
           destTc: r.dest_tc
         }));
 
-        // Merge routes and eliminate duplicates by route number and company/bound variants
         const combined = [...kmbRoutes, ...ctbRoutes];
         const routeMap = new Map();
 
+        // Group joint-operated routes (same route number AND same endpoints) together,
+        // while keeping routes with the same number but different endpoints separate.
         combined.forEach(r => {
-          if (!r.route) return;
-          const routeKey = r.route.toUpperCase();
+          if (!r.route || !r.origTc || !r.destTc) return;
+          const routeNum = r.route.toUpperCase();
           
-          if (!routeMap.has(routeKey)) {
-            routeMap.set(routeKey, {
+          // Create a direction-agnostic endpoint signature to group joint routes properly
+          const sortedEnds = [r.origTc.trim(), r.destTc.trim()].sort();
+          const endpointSig = `${sortedEnds[0]}_${sortedEnds[1]}`;
+          
+          const mapKey = `${routeNum}__${endpointSig}`;
+
+          if (!routeMap.has(mapKey)) {
+            routeMap.set(mapKey, {
               route: r.route,
               companies: new Set(),
               variants: []
             });
           }
 
-          const group = routeMap.get(routeKey);
+          const group = routeMap.get(mapKey);
           group.companies.add(r.company);
 
-          // Prevent duplicate variants (same company, bound, and serviceType)
           const isDuplicateVariant = group.variants.some(v => 
             v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType
           );
@@ -133,8 +139,7 @@
 
         allRoutes = [];
         routeMap.forEach((group) => {
-          // Default to service type '1' and outbound/primary direction if available
-          const defaultVariant = group.variants.find(v => v.serviceType === '1' && (v.bound === 'O' || v.bound === 'outbound')) || group.variants[0];
+          const defaultVariant = group.variants.find(v => v.serviceType === '1' && (v.bound === 'O' || v.bound.toLowerCase() === 'outbound')) || group.variants[0];
           allRoutes.push({
             route: group.route,
             companies: Array.from(group.companies),
@@ -292,7 +297,6 @@
       const currentBound = currentSelectedRoute.bound.toLowerCase();
       const isOutbound = currentBound === 'o' || currentBound === 'outbound';
 
-      // Find the opposite direction variant for the active company
       const targetVariant = companyVariants.find(v => {
         const vBound = v.bound.toLowerCase();
         const vIsOutbound = vBound === 'o' || vBound === 'outbound';
