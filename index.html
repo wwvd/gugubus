@@ -86,7 +86,7 @@
 
         const kmbRoutes = (kmbRes.data || []).map(r => ({
           company: 'KMB',
-          route: r.route,
+          route: r.route ? r.route.trim() : '',
           bound: r.bound,
           serviceType: r.service_type || '1',
           origTc: r.orig_tc,
@@ -95,19 +95,21 @@
 
         const ctbRoutes = (ctbRes.data || []).map(r => ({
           company: 'CTB',
-          route: r.route,
-          bound: 'outbound',
+          route: r.route ? r.route.trim() : '',
+          bound: r.bound || 'outbound',
           serviceType: '1',
           origTc: r.orig_tc,
           destTc: r.dest_tc
         }));
 
-        // Merge routes operated by different companies by route number
+        // Merge routes and eliminate duplicates by route number and company/bound variants
         const combined = [...kmbRoutes, ...ctbRoutes];
         const routeMap = new Map();
 
         combined.forEach(r => {
+          if (!r.route) return;
           const routeKey = r.route.toUpperCase();
+          
           if (!routeMap.has(routeKey)) {
             routeMap.set(routeKey, {
               route: r.route,
@@ -115,14 +117,24 @@
               variants: []
             });
           }
+
           const group = routeMap.get(routeKey);
           group.companies.add(r.company);
-          group.variants.push(r);
+
+          // Prevent duplicate variants (same company, bound, and serviceType)
+          const isDuplicateVariant = group.variants.some(v => 
+            v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType
+          );
+
+          if (!isDuplicateVariant) {
+            group.variants.push(r);
+          }
         });
 
         allRoutes = [];
         routeMap.forEach((group) => {
-          const defaultVariant = group.variants[0];
+          // Default to service type '1' and outbound/primary direction if available
+          const defaultVariant = group.variants.find(v => v.serviceType === '1' && (v.bound === 'O' || v.bound === 'outbound')) || group.variants[0];
           allRoutes.push({
             route: group.route,
             companies: Array.from(group.companies),
@@ -260,7 +272,7 @@
       if (!currentSelectedRoute || currentSelectedRoute.activeCompany === company) return;
       
       currentSelectedRoute.activeCompany = company;
-      const variant = currentSelectedRoute.variants.find(v => v.company === company);
+      const variant = currentSelectedRoute.variants.find(v => v.company === company) || currentSelectedRoute.variants[0];
       if (variant) {
         currentSelectedRoute.bound = variant.bound;
         currentSelectedRoute.serviceType = variant.serviceType;
@@ -276,17 +288,26 @@
     function toggleDirection() {
       if (!currentSelectedRoute) return;
 
-      const temp = currentSelectedRoute.origTc;
-      currentSelectedRoute.origTc = currentSelectedRoute.destTc;
-      currentSelectedRoute.destTc = temp;
+      const companyVariants = currentSelectedRoute.variants.filter(v => v.company === currentSelectedRoute.activeCompany);
+      const currentBound = currentSelectedRoute.bound.toLowerCase();
+      const isOutbound = currentBound === 'o' || currentBound === 'outbound';
 
-      if (currentSelectedRoute.activeCompany === 'KMB') {
-        currentSelectedRoute.bound = currentSelectedRoute.bound.toUpperCase() === 'O' ? 'I' : 'O';
-      } else {
-        currentSelectedRoute.bound = currentSelectedRoute.bound.toLowerCase() === 'outbound' ? 'inbound' : 'outbound';
+      // Find the opposite direction variant for the active company
+      const targetVariant = companyVariants.find(v => {
+        const vBound = v.bound.toLowerCase();
+        const vIsOutbound = vBound === 'o' || vBound === 'outbound';
+        return vIsOutbound !== isOutbound;
+      }) || companyVariants[0];
+
+      if (targetVariant) {
+        currentSelectedRoute.bound = targetVariant.bound;
+        currentSelectedRoute.serviceType = targetVariant.serviceType || '1';
+        currentSelectedRoute.origTc = targetVariant.origTc;
+        currentSelectedRoute.destTc = targetVariant.destTc;
       }
 
       currentSelectedStop = null;
+      document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
       document.getElementById('selectedStopInfo').textContent = "請選擇下方車站";
       document.getElementById('etaContainer').innerHTML = "";
       loadStopsForCurrentRoute();
