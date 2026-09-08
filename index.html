@@ -3,103 +3,47 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🍄 Gugubus 菇專用香港巴士實時到站查詢</title>
-
-  <!-- Tailwind CSS -->
+  <title>香港巴士實時到站查詢</title>
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- 可愛圓體字型 -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
-
-  <style>
-    body {
-      font-family: 'Zen Maru Gothic', system-ui, -apple-system, sans-serif;
-    }
-    .mushroom-gradient {
-      background: linear-gradient(135deg, #8c533e 0%, #b36b4d 50%, #d9825b 100%);
-    }
-    .hidden {
-      display: none !important;
-    }
-  </style>
 </head>
-<body class="bg-[#FAF6F0] min-h-screen text-[#4A3B32] antialiased">
+<body class="bg-gray-100 min-h-screen text-gray-800">
 
-  <!-- Header -->
-  <header class="mushroom-gradient text-amber-50 p-4 shadow-lg sticky top-0 z-50 rounded-b-2xl">
-    <div class="max-w-3xl mx-auto flex justify-between items-center">
-      <div class="flex items-center space-x-2">
-        <button id="backBtn" class="hidden text-sm bg-[#5C3627]/40 hover:bg-[#5C3627]/60 text-amber-100 px-3 py-1.5 rounded-full transition-all border border-amber-200/30 flex items-center gap-1 shadow-sm" onclick="showRouteList()">
-          <span>🍄</span>
-          <span>返回路線</span>
-        </button>
-        <h1 class="text-lg md:text-xl font-black tracking-wide flex items-center gap-2 drop-shadow-sm" id="appTitle">
-          <span>🍄</span>
-          <span>Gugubus 菇專用全港巴士實時到站</span>
-        </h1>
-      </div>
-      <span class="text-xs bg-amber-100/20 text-amber-100 px-2.5 py-1 rounded-full border border-amber-100/30 hidden sm:inline-block">
-        小菇陪伴你搭車 🚌
-      </span>
+  <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-50">
+    <div class="max-w-2xl mx-auto flex justify-between items-center">
+      <button id="backBtn" class="hidden text-sm bg-blue-700 hover:bg-blue-800 px-3 py-1.5 rounded transition" onclick="showRouteList()">
+        返回路線列表
+      </button>
+      <h1 class="text-lg font-bold" id="appTitle">香港巴士實時到站查詢</h1>
     </div>
   </header>
 
-  <main class="max-w-3xl mx-auto p-4">
+  <main class="max-w-2xl mx-auto p-4">
 
-    <!-- Selected Route / ETA Card -->
-    <div id="infoCard" class="hidden bg-[#FFFDF9] p-5 rounded-2xl shadow-md mb-4 border-2 border-[#EADBC8] transition-all">
-      <div class="flex justify-between items-start mb-2">
-        <div id="selectedRouteHeader" class="flex items-center space-x-2"></div>
-        <button id="switchDirBtn" onclick="toggleDirection()" class="text-xs bg-[#F4ECE1] hover:bg-[#E8DCCB] text-[#8C533E] border border-[#D8C4B0] px-3 py-1.5 rounded-full font-bold transition flex items-center space-x-1 shadow-sm hover:scale-105 active:scale-95">
-          <span>切換方向</span>
-          <span class="text-sm">⇄</span>
-        </button>
+    <!-- 搜尋與篩選區 -->
+    <div id="searchSection" class="bg-white p-4 rounded-xl shadow-sm mb-4 space-y-3">
+      <div class="flex gap-2">
+        <button onclick="setCompanyFilter('ALL')" id="filterAll" class="px-3 py-1 rounded text-sm font-bold bg-blue-600 text-white">全部</button>
+        <button onclick="setCompanyFilter('KMB')" id="filterKmb" class="px-3 py-1 rounded text-sm font-bold bg-gray-200 text-gray-700">九巴</button>
+        <button onclick="setCompanyFilter('CTB')" id="filterCtb" class="px-3 py-1 rounded text-sm font-bold bg-gray-200 text-gray-700">城巴</button>
       </div>
-      <div id="selectedRouteDir" class="text-sm font-semibold text-[#8C7A6B] mb-3"></div>
-      
-      <div id="selectedStopInfo" class="text-base font-bold text-[#5C4A3E] border-t border-[#F0E6D8] pt-3 flex items-center gap-1">
-        請選擇下方車站
-      </div>
-      
-      <!-- ETA Badges Container -->
-      <div id="etaContainer" class="mt-3 flex flex-wrap gap-2.5"></div>
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="輸入路線編號或地名 (例如 1, 101, 觀塘)..." 
+        class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
 
-    <!-- Search and Filter Section -->
-    <div id="searchSection" class="bg-[#FFFDF9] p-4 rounded-2xl shadow-sm mb-4 border border-[#EADBC8] space-y-3">
-      <!-- Filter Buttons -->
-      <div class="flex flex-wrap gap-2">
-        <button onclick="setCompanyFilter('ALL')" id="filterAll" class="px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#8C533E] text-amber-50 shadow-sm transition">全部</button>
-        <button onclick="setCompanyFilter('KMB')" id="filterKmb" class="px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#F0E6D8] text-[#7A6251] hover:bg-[#E2D2C0] transition">九巴/龍運</button>
-        <button onclick="setCompanyFilter('CTB')" id="filterCtb" class="px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#F0E6D8] text-[#7A6251] hover:bg-[#E2D2C0] transition">城巴</button>
+    <!-- 路線詳細資訊 / 到站時間卡片 -->
+    <div id="infoCard" class="hidden bg-white p-4 rounded-xl shadow-sm mb-4">
+      <div class="flex justify-between items-center mb-2">
+        <div id="selectedRouteHeader" class="font-bold text-lg"></div>
+        <button onclick="toggleDirection()" class="text-xs bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded font-bold">切換方向 ⇄</button>
       </div>
-
-      <!-- Live Load Status -->
-      <div id="statusTag" class="text-xs font-bold text-[#8C6D58] flex items-center justify-between">
-        <span id="statusText">🍄 菇菇熱門路線已就緒！</span>
-      </div>
-
-      <!-- Search Input -->
-      <div class="relative">
-        <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線或地名 (例如 1, 1A, 101, 118, 960, 觀塘, 屯門)..." 
-          class="w-full px-4 py-2.5 bg-[#FAF6F0] border-2 border-[#E2D2C0] rounded-xl focus:outline-none focus:border-[#8C533E] focus:bg-white text-sm font-semibold text-[#4A3B32] placeholder-[#A8988B] transition">
-        <span class="absolute right-3.5 top-2.5 text-base">🔍</span>
-      </div>
+      <div id="selectedRouteDir" class="text-sm text-gray-600 mb-3"></div>
+      <div id="selectedStopInfo" class="text-sm font-bold text-gray-700 border-t pt-2">請選擇下方車站</div>
+      <div id="etaContainer" class="mt-2 flex flex-wrap gap-2"></div>
     </div>
 
-    <!-- Loading Spinner -->
-    <div id="loading" class="hidden flex-col items-center justify-center py-16">
-      <div class="text-4xl animate-bounce mb-2">🍄</div>
-      <p id="loadingMsg" class="text-[#8C6D58] font-bold text-sm tracking-wider">小菇正在讀取資料中...</p>
-    </div>
-
-    <!-- Route List View -->
-    <div id="routeListView" class="space-y-2.5"></div>
-
-    <!-- Stop List View -->
-    <div id="stopListView" class="hidden space-y-2.5"></div>
+    <!-- 路線列表與車站列表 -->
+    <div id="routeListView" class="space-y-2"></div>
+    <div id="stopListView" class="hidden space-y-2"></div>
 
   </main>
 
@@ -107,129 +51,49 @@
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
 
-    // 原始乾淨的熱門路線資料庫
     const ROUTES_DB = [
-      { company: 'KMB', companyName: '九巴/龍運', route: '1', orig: '竹園邨', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '1A', orig: '中秀茂坪', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '2X', orig: '彩福', dest: '美孚', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '3C', orig: '慈雲山(北)', dest: '中港碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '5C', orig: '慈雲山(中)', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '6', orig: '荔枝角', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '11', orig: '鑽石山站', dest: '九龍站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '13X', orig: '寶達', dest: '尖沙咀東', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '14', orig: '鯉魚門邨', dest: '中港碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '16', orig: '藍田(廣田邨)', dest: '旺角(柏景灣)', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '30X', orig: '荃威花園', dest: '黃埔花園', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '35A', orig: '安蔭', dest: '尖沙咀東', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '38', orig: '葵盛(東)', dest: '平田', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '40', orig: '荃灣(麗城花園)', dest: '麗港城', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '42C', orig: '青衣長亨邨', dest: '藍田站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '43X', orig: '荃灣西站', dest: '耀安', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '48X', orig: '禾輋', dest: '灣景花園', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '49X', orig: '廣源', dest: '青衣碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '58X', orig: '屯門(良景邨)', dest: '旺角東站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '60X', orig: '屯門市中心', dest: '佐敦(西九龍站)', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '68M', orig: '荃灣站', dest: '元朗(西)', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '68X', orig: '洪水橋(洪福邨)', dest: '旺角(柏景灣)', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '73X', orig: '荃灣(如心廣場)', dest: '富善邨', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '74X', orig: '大埔中心', dest: '觀塘碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '80', orig: '美林', dest: '觀塘碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '81C', orig: '耀安', dest: '尖沙咀東(麼地道)', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '87D', orig: '錦英苑', dest: '紅磡站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '89', orig: '瀝源', dest: '觀塘站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '89D', orig: '烏溪沙站', dest: '藍田站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '98D', orig: '坑口(北)', dest: '尖沙咀東', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '215X', orig: '藍田(廣田邨)', dest: '九龍站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '238M', orig: '海濱花園', dest: '荃灣站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '268C', orig: '朗屏站', dest: '觀塘碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '269C', orig: '天水圍市中心', dest: '觀塘碼頭', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '271', orig: '富亨', dest: '尖沙咀(廣東道)', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '277X', orig: '聯和墟', dest: '藍田站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '281A', orig: '廣源', dest: '九龍站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '290', orig: '將軍澳彩明', dest: '荃灣西站', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: 'B1', orig: '天水圍天慈邨', dest: '落馬洲站', bound: 'outbound', serviceType: '1' },
-
-      { company: 'CTB', companyName: '城巴', route: '1', orig: '摩星嶺', dest: '跑馬地(上)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '5B', orig: '堅尼地城', dest: '銅鑼灣(香港大球場)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '8X', orig: '小西灣(藍灣半島)', dest: '跑馬地(下)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '10', orig: '堅尼地城', dest: '北角碼頭', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '720', orig: '嘉亨灣', dest: '中環(機利文街)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '788', orig: '小西灣(藍灣半島)', dest: '中環(港澳碼頭)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '962X', orig: '屯門(龍門居)', dest: '銅鑼灣(摩頓台)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '970', orig: '數碼港', dest: '蘇屋', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: '970X', orig: '香港仔', dest: '長沙灣(甘泉街)', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: 'A11', orig: '機場', dest: '北角碼頭', bound: 'outbound' },
-      { company: 'CTB', companyName: '城巴', route: 'A21', orig: '機場', dest: '紅磡站', bound: 'outbound' },
-
-      { company: 'KMB', companyName: '九巴/龍運', route: '101', orig: '堅尼地城', dest: '觀塘(裕民坊)', bound: 'outbound', serviceType: '1' },
+      { company: 'KMB', companyName: '九巴', route: '1', orig: '竹園邨', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
+      { company: 'KMB', companyName: '九巴', route: '1A', orig: '中秀茂坪', dest: '尖沙咀碼頭', bound: 'outbound', serviceType: '1' },
+      { company: 'KMB', companyName: '九巴', route: '2X', orig: '彩福', dest: '美孚', bound: 'outbound', serviceType: '1' },
+      { company: 'KMB', companyName: '九巴', route: '101', orig: '堅尼地城', dest: '觀塘(裕民坊)', bound: 'outbound', serviceType: '1' },
       { company: 'CTB', companyName: '城巴', route: '101', orig: '堅尼地城', dest: '觀塘(裕民坊)', bound: 'outbound' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '102', orig: '美孚', dest: '筲箕灣', bound: 'outbound', serviceType: '1' },
+      { company: 'KMB', companyName: '九巴', route: '102', orig: '美孚', dest: '筲箕灣', bound: 'outbound', serviceType: '1' },
       { company: 'CTB', companyName: '城巴', route: '102', orig: '美孚', dest: '筲箕灣', bound: 'outbound' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '118', orig: '長沙灣(深旺道)', dest: '小西灣(藍灣半島)', bound: 'outbound', serviceType: '1' },
-      { company: 'CTB', companyName: '城巴', route: '118', orig: '長沙灣(深旺道)', dest: '小西灣(藍灣半島)', bound: 'outbound' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '619', orig: '順利', dest: '中環(港澳碼頭)', bound: 'outbound', serviceType: '1' },
-      { company: 'CTB', companyName: '城巴', route: '619', orig: '順利', dest: '中環(港澳碼頭)', bound: 'outbound' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '960', orig: '屯門(建生邨)', dest: '灣仔北', bound: 'outbound', serviceType: '1' },
-      { company: 'KMB', companyName: '九巴/龍運', route: '968', orig: '元朗(西)', dest: '銅鑼灣(天后)', bound: 'outbound', serviceType: '1' }
+      { company: 'CTB', companyName: '城巴', route: '1', orig: '摩星嶺', dest: '跑馬地(上)', bound: 'outbound' },
+      { company: 'CTB', companyName: '城巴', route: '5B', orig: '堅尼地城', dest: '銅鑼灣', bound: 'outbound' },
+      { company: 'KMB', companyName: '九巴', route: '960', orig: '屯門(建生邨)', dest: '灣仔北', bound: 'outbound', serviceType: '1' },
+      { company: 'KMB', companyName: '九巴', route: '968', orig: '元朗(西)', dest: '銅鑼灣(天后)', bound: 'outbound', serviceType: '1' }
     ];
 
     let selectedCompanyFilter = 'ALL';
     let currentSelectedRoute = null;
 
-    function showLoading(isLoading) {
-      const loader = document.getElementById('loading');
-      if (loader) {
-        if (isLoading) loader.classList.remove('hidden');
-        else loader.classList.add('hidden');
-      }
-    }
-
     function initApp() {
       filterRoutes();
-      showLoading(false);
-    }
-
-    function getCompanyBadgeStyle(code) {
-      switch (code) {
-        case 'KMB': return 'bg-[#D9534F] text-white';
-        case 'CTB': return 'bg-[#F0AD4E] text-[#332211]';
-        default: return 'bg-[#8C533E] text-white';
-      }
     }
 
     function renderRoutes(routes) {
       const container = document.getElementById('routeListView');
-      if (!container) return;
       container.innerHTML = '';
 
-      if (!routes || routes.length === 0) {
-        container.innerHTML = `
-          <div class="text-center py-10 bg-[#FFFDF9] rounded-2xl border border-[#EADBC8] p-6">
-            <span class="text-3xl block mb-2">🍄💧</span>
-            <p class="text-[#8C6D58] font-bold">找不到相關路線喔～換個關鍵字搜尋看看吧！</p>
-          </div>`;
+      if (routes.length === 0) {
+        container.innerHTML = `<div class="text-center py-8 text-gray-500">找不到相關路線</div>`;
         return;
       }
 
       routes.forEach(r => {
         const card = document.createElement('div');
-        card.className = "bg-[#FFFDF9] hover:bg-[#FDF9F3] p-4 rounded-2xl shadow-sm border border-[#EADBC8] hover:border-[#D8C4B0] hover:shadow-md transition-all cursor-pointer flex justify-between items-center group transform hover:-translate-y-0.5";
+        card.className = "bg-white p-3 rounded-lg shadow-sm hover:shadow transition cursor-pointer flex justify-between items-center";
         card.onclick = () => selectRoute(r);
 
-        const badgeStyle = getCompanyBadgeStyle(r.company);
+        const badgeColor = r.company === 'KMB' ? 'bg-red-500 text-white' : 'bg-orange-400 text-white';
 
         card.innerHTML = `
-          <div class="flex items-center space-x-2">
-            <span class="px-2 py-0.5 rounded-lg font-black text-[11px] ${badgeStyle} shadow-sm">
-              ${r.companyName}
-            </span>
-            <span class="text-xl font-black text-[#4A3B32] group-hover:text-[#8C533E] transition pl-1">${r.route}</span>
+          <div class="flex items-center space-x-3">
+            <span class="px-2 py-0.5 rounded text-xs font-bold ${badgeColor}">${r.companyName}</span>
+            <span class="text-lg font-bold">${r.route}</span>
           </div>
-          <div class="text-xs md:text-sm font-bold text-[#8C7A6B] flex items-center gap-1">
-            <span>${r.orig}</span>
-            <span class="text-[#D9825B]">➔</span>
-            <span>${r.dest}</span>
-          </div>
+          <div class="text-sm text-gray-600">${r.orig} ➔ ${r.dest}</div>
         `;
         container.appendChild(card);
       });
@@ -241,12 +105,8 @@
       const filtered = ROUTES_DB.filter(r => {
         const matchesCompany = selectedCompanyFilter === 'ALL' || r.company === selectedCompanyFilter;
         if (!matchesCompany) return false;
-
         if (!query) return true;
-
-        return r.route.toUpperCase().includes(query) ||
-               r.orig.toUpperCase().includes(query) ||
-               r.dest.toUpperCase().includes(query);
+        return r.route.toUpperCase().includes(query) || r.orig.toUpperCase().includes(query) || r.dest.toUpperCase().includes(query);
       });
 
       renderRoutes(filtered);
@@ -258,9 +118,9 @@
         const btn = document.getElementById(`filter${type}`);
         if (btn) {
           if (type.toUpperCase() === company || (type === 'All' && company === 'ALL')) {
-            btn.className = "px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#8C533E] text-amber-50 shadow-sm transition";
+            btn.className = "px-3 py-1 rounded text-sm font-bold bg-blue-600 text-white";
           } else {
-            btn.className = "px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#F0E6D8] text-[#7A6251] hover:bg-[#E2D2C0] transition";
+            btn.className = "px-3 py-1 rounded text-sm font-bold bg-gray-200 text-gray-700";
           }
         }
       });
@@ -270,44 +130,20 @@
     async function selectRoute(route) {
       currentSelectedRoute = JSON.parse(JSON.stringify(route));
 
-      document.getElementById('routeListView')?.classList.add('hidden');
-      document.getElementById('searchSection')?.classList.add('hidden');
-      document.getElementById('backBtn')?.classList.remove('hidden');
-      
-      const appTitle = document.getElementById('appTitle');
-      if (appTitle) appTitle.innerHTML = `<span>🍄</span><span>${route.companyName} ${route.route} 車站列表</span>`;
+      document.getElementById('routeListView').classList.add('hidden');
+      document.getElementById('searchSection').classList.add('hidden');
+      document.getElementById('backBtn').classList.remove('hidden');
+      document.getElementById('appTitle').textContent = `${route.companyName} ${route.route} 車站列表`;
+      document.getElementById('infoCard').classList.remove('hidden');
 
-      const infoCard = document.getElementById('infoCard');
-      if (infoCard) infoCard.classList.remove('hidden');
-
-      const badgeStyle = getCompanyBadgeStyle(route.company);
-      const header = document.getElementById('selectedRouteHeader');
-      if (header) {
-        header.innerHTML = `
-          <div class="flex items-center gap-1.5">
-            <span class="px-2 py-0.5 rounded-lg font-black text-xs ${badgeStyle}">
-              ${route.companyName}
-            </span>
-            <span class="text-xl font-black text-[#4A3B32]">${route.route}</span>
-          </div>
-        `;
-      }
-
-      const dir = document.getElementById('selectedRouteDir');
-      if (dir) dir.textContent = `${route.orig} ➔ ${route.dest}`;
-
-      const stopInfo = document.getElementById('selectedStopInfo');
-      if (stopInfo) stopInfo.innerHTML = `<span>🍄</span><span>請選擇下方車站查看實時到站時間</span>`;
-
-      const etaBox = document.getElementById('etaContainer');
-      if (etaBox) etaBox.innerHTML = "";
-
-      showLoading(true);
-      document.getElementById('stopListView')?.classList.add('hidden');
+      document.getElementById('selectedRouteHeader').textContent = `${route.companyName} ${route.route}`;
+      document.getElementById('selectedRouteDir').textContent = `${route.orig} ➔ ${route.dest}`;
+      document.getElementById('selectedStopInfo').textContent = "請選擇下方車站";
+      document.getElementById('etaContainer').innerHTML = "";
+      document.getElementById('stopListView').classList.add('hidden');
 
       try {
         let stopsRaw = [];
-
         if (route.company === 'KMB') {
           const bound = route.bound === 'inbound' ? 'inbound' : 'outbound';
           const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${bound}/${route.serviceType || '1'}`);
@@ -319,35 +155,23 @@
           stopsRaw = data.data || [];
         }
 
-        if (stopsRaw.length === 0) {
-          stopsRaw.push({ seq: 1, stop: 'DEFAULT' });
-        }
-
         const stopPromises = stopsRaw.map(async (s, idx) => {
           let name = `巴士站 ${s.seq || idx + 1}`;
-          if (s.stop && s.stop !== 'DEFAULT') {
+          if (s.stop) {
             const apiBase = route.company === 'KMB' ? KMB_BASE : CTB_BASE;
             try {
               const stopRes = await fetch(`${apiBase}/stop/${s.stop}`);
               const stopData = await stopRes.json();
-              if (stopData && stopData.data && stopData.data.name_tc) {
-                name = stopData.data.name_tc;
-              }
+              if (stopData?.data?.name_tc) name = stopData.data.name_tc;
             } catch (e) {}
           }
-          return {
-            seq: s.seq || (idx + 1),
-            name: name,
-            stopId: s.stop
-          };
+          return { seq: s.seq || (idx + 1), name, stopId: s.stop };
         });
 
         const stops = (await Promise.all(stopPromises)).sort((a, b) => a.seq - b.seq);
         renderStops(stops);
       } catch (err) {
         console.error(err);
-      } finally {
-        showLoading(false);
       }
     }
 
@@ -362,12 +186,74 @@
 
     function renderStops(stops) {
       const container = document.getElementById('stopListView');
-      if (!container) return;
       container.innerHTML = '';
       container.classList.remove('hidden');
 
       stops.forEach(s => {
         const card = document.createElement('div');
-        card.id = `stop-card-${s.seq}`;
-        card.className = "bg-[#FFFDF9] p-3.5 rounded-2xl shadow-sm border border-[#EADBC8] hover:border-[#B36B4D] transition-all cursor-pointer flex items-center space-x-3 group";
-        card.onclick = 
+        card.className = "bg-white p-3 rounded-lg shadow-sm hover:shadow transition cursor-pointer flex items-center space-x-3";
+        card.onclick = () => fetchETA(s);
+
+        card.innerHTML = `
+          <span class="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">${s.seq}</span>
+          <span class="font-medium">${s.name}</span>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    async function fetchETA(stop) {
+      document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.name}`;
+      const etaContainer = document.getElementById('etaContainer');
+      etaContainer.innerHTML = `<span class="text-sm text-gray-500">正在查詢時間...</span>`;
+
+      try {
+        let rawEtas = [];
+        if (currentSelectedRoute.company === 'KMB' && stop.stopId) {
+          const res = await fetch(`${KMB_BASE}/eta/${stop.stopId}/${currentSelectedRoute.route}/${currentSelectedRoute.serviceType || '1'}`);
+          const data = await res.json();
+          rawEtas = data.data || [];
+        } else if (currentSelectedRoute.company === 'CTB' && stop.stopId) {
+          const res = await fetch(`${CTB_BASE}/eta/ctb/${stop.stopId}/${currentSelectedRoute.route}`);
+          const data = await res.json();
+          rawEtas = data.data || [];
+        }
+
+        const now = new Date();
+        const etas = rawEtas
+          .filter(item => item && item.eta)
+          .map(item => {
+            const diffMin = Math.round((new Date(item.eta) - now) / 60000);
+            return diffMin >= 0 ? diffMin : 0;
+          })
+          .slice(0, 3);
+
+        etaContainer.innerHTML = '';
+        if (etas.length === 0) {
+          etaContainer.innerHTML = `<span class="text-sm text-red-500 font-bold">暫無即時班次資料</span>`;
+        } else {
+          etas.forEach((mins, idx) => {
+            const badge = document.createElement('span');
+            badge.className = "bg-blue-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm";
+            badge.textContent = mins === 0 ? `第 ${idx + 1} 班: 即將到站` : `第 ${idx + 1} 班: ${mins} 分鐘`;
+            etaContainer.appendChild(badge);
+          });
+        }
+      } catch (err) {
+        etaContainer.innerHTML = `<span class="text-sm text-red-500 font-bold">無法獲取實時數據</span>`;
+      }
+    }
+
+    function showRouteList() {
+      document.getElementById('routeListView').classList.remove('hidden');
+      document.getElementById('searchSection').classList.remove('hidden');
+      document.getElementById('backBtn').classList.add('hidden');
+      document.getElementById('appTitle').textContent = "香港巴士實時到站查詢";
+      document.getElementById('infoCard').classList.add('hidden');
+      document.getElementById('stopListView').classList.add('hidden');
+    }
+
+    initApp();
+  </script>
+</body>
+</html>
