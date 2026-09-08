@@ -75,17 +75,23 @@
         <button onclick="setCompanyFilter('CTB')" id="filterCtb" class="px-4 py-1.5 rounded-full text-xs md:text-sm font-bold bg-[#F0E6D8] text-[#7A6251] hover:bg-[#E2D2C0] transition">城巴</button>
       </div>
 
-      <!-- Live Load Status & Debug Panel -->
+      <!-- Live Status & Debug -->
       <div id="statusTag" class="text-xs font-bold text-[#8C6D58] flex items-center justify-between bg-[#FDF5EB] p-2 rounded-lg border border-[#EADBC8]">
-        <span id="statusText">🍄 系統初始化中...</span>
+        <span id="statusText">🍄 系統就緒</span>
         <span id="debugCount" class="text-[#B36B4D]">就緒</span>
       </div>
 
-      <!-- Search Input -->
-      <div class="relative">
-        <input type="text" id="searchInput" placeholder="搜尋路線或地名 (例如 1, 1A, 101, 118, 960, 觀塘, 屯門)..." 
+      <!-- Search Input & Button -->
+      <div class="flex gap-2">
+        <input type="text" id="searchInput" 
+          oninput="filterRoutes()" 
+          onkeydown="if(event.key === 'Enter') filterRoutes()" 
+          placeholder="搜尋路線或地名 (例如 1, 1A, 101, 118, 960, 觀塘)..." 
           class="w-full px-4 py-2.5 bg-[#FAF6F0] border-2 border-[#E2D2C0] rounded-xl focus:outline-none focus:border-[#8C533E] focus:bg-white text-sm font-semibold text-[#4A3B32] placeholder-[#A8988B] transition">
-        <span class="absolute right-3.5 top-2.5 text-base">🔍</span>
+        <button onclick="filterRoutes()" class="bg-[#8C533E] hover:bg-[#72412E] text-amber-50 px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex-shrink-0 flex items-center gap-1">
+          <span>🔍</span>
+          <span>搜尋</span>
+        </button>
       </div>
     </div>
 
@@ -214,12 +220,6 @@
     }
 
     function initApp() {
-      const searchInput = document.getElementById('searchInput');
-      if (searchInput) {
-        searchInput.addEventListener('input', filterRoutes);
-        searchInput.addEventListener('keyup', filterRoutes);
-      }
-
       updateStatus("🍄 內建路線庫就緒", `${allRoutes.length} 條路線`);
       filterRoutes();
       showLoading(false);
@@ -379,7 +379,4 @@
         });
 
         const sortedRoutes = matches.map(m => m.routeObj);
-        renderRoutes(sortedRoutes.slice(0, 60), sortedRoutes.length);
-      } catch (err) {
-        console.error("Filter error:", err);
-       
+        renderRoutes(sortedRoutes.slice(0, 60), sortedRoutes.length
