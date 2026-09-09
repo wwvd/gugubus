@@ -64,22 +64,20 @@
     let allRoutes = [];
     let currentSelectedRoute = null;
 
-    function normalizeTerminus(name) {
+    function cleanStopName(name) {
       if (!name) return '';
       return name
-        .replace(/（.*?）|\(.*?\)/g, '')
-        .replace(/巴士總站|總站|特別班次|（循環線）|\(循環線\)|循環線|轉乘站|市中心|站/g, '')
-        .replace(/[\s\-_]+/g, '')
+        .replace(/（.*?）|\(.*?\)|【.*?】/g, '')
+        .replace(/巴士總站|總站|分站|車站|特別班次|循環線|轉乘站|市中心|廣場|大廈|商場/g, '')
+        .replace(/[，, \-_]/g, '')
         .trim();
     }
 
     function isSameJointRoute(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       
-      const stripNoise = s => s.replace(/（.*?）|\(.*?\)|巴士總站|總站|特別班次|（循環線）|\(循環線\)|循環線|轉乘站|市中心/g, '').replace(/[\s\-_]+/g, '');
-      
-      const t1 = [stripNoise(r1.origTc), stripNoise(r1.destTc)];
-      const t2 = [stripNoise(r2.origTc), stripNoise(r2.destTc)];
+      const t1 = [cleanStopName(r1.origTc), cleanStopName(r1.destTc)];
+      const t2 = [cleanStopName(r2.origTc), cleanStopName(r2.destTc)];
       
       for (let a of t1) {
         if (!a || a.length < 2) continue;
@@ -93,6 +91,41 @@
         }
       }
       return false;
+    }
+
+    function findBestCtbMatch(kStop, ctbStops) {
+      if (!ctbStops || ctbStops.length === 0) return null;
+
+      let bestMatch = null;
+      let minDistance = Infinity;
+
+      // 1. Try GPS coordinate matching (within ~200 meters)
+      if (kStop.lat && kStop.long) {
+        ctbStops.forEach(cStop => {
+          if (cStop.lat && cStop.long) {
+            const dLat = kStop.lat - cStop.lat;
+            const dLong = kStop.long - cStop.long;
+            const distSq = dLat * dLat + dLong * dLong;
+            if (distSq < 0.00001 && distSq < minDistance) {
+              minDistance = distSq;
+              bestMatch = cStop;
+            }
+          }
+        });
+      }
+
+      if (bestMatch) return bestMatch;
+
+      // 2. Fallback to name similarity matching
+      const kNorm = cleanStopName(kStop.name);
+      if (kNorm.length >= 2) {
+        bestMatch = ctbStops.find(cStop => {
+          const cNorm = cleanStopName(cStop.name);
+          return cNorm.includes(kNorm) || kNorm.includes(cNorm);
+        });
+      }
+
+      return bestMatch || null;
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -282,6 +315,7 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
+        // Fetch KMB stops & details (including GPS coordinates)
         if (route.companies.includes('KMB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB') || {};
           const isOutbound = route.dir === 'outbound';
@@ -291,14 +325,20 @@
 
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             let name = `巴士站 ${s.seq}`;
+            let lat = null, long = null;
             try {
               const stopRes = await fetch(`${KMB_BASE}/stop/${s.stop}`).then(r => r.json());
-              name = stopRes.data?.name_tc || name;
+              if (stopRes.data) {
+                name = stopRes.data.name_tc || name;
+                lat = parseFloat(stopRes.data.lat);
+                long = parseFloat(stopRes.data.long);
+              }
             } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name };
+            return { stopId: s.stop, seq: s.seq, name, lat, long };
           }));
         }
 
+        // Fetch CTB stops & details (including GPS coordinates)
         if (route.companies.includes('CTB')) {
           const isOutbound = route.dir === 'outbound';
           const dir = isOutbound ? 'outbound' : 'inbound';
@@ -307,19 +347,24 @@
 
           ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             let name = `巴士站 ${s.seq}`;
+            let lat = null, long = null;
             try {
               const stopRes = await fetch(`${CTB_BASE}/stop/${s.stop}`).then(r => r.json());
-              name = stopRes.data?.name_tc || name;
+              if (stopRes.data) {
+                name = stopRes.data.name_tc || name;
+                lat = parseFloat(stopRes.data.lat);
+                long = parseFloat(stopRes.data.long);
+              }
             } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name };
+            return { stopId: s.stop, seq: s.seq, name, lat, long };
           }));
         }
 
+        // Accurately pair KMB and CTB stops using GPS location & name matching
         let finalStops = [];
         if (isJoint && kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map((kStop, index) => {
-            const kNorm = normalizeTerminus(kStop.name);
-            const matchedCtb = ctbStopsDetailed.find(cStop => normalizeTerminus(cStop.name) === kNorm) || ctbStopsDetailed[index];
+          finalStops = kmbStopsDetailed.map((kStop) => {
+            const matchedCtb = findBestCtbMatch(kStop, ctbStopsDetailed);
             return {
               seq: kStop.seq,
               name: kStop.name,
@@ -437,6 +482,8 @@
         });
 
         uniqueEtas.sort((a, b) => a.mins - b.mins);
+        
+        // Show exactly the 3 most current ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
