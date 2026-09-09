@@ -143,7 +143,6 @@
       const url = `${MTR_BASE}/getSchedule`;
       const payload = { language: 'zh', routeName: routeName };
 
-      // Direct POST using text/plain header to bypass CORS OPTIONS preflight
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
@@ -160,7 +159,6 @@
         }
       } catch (e) {}
 
-      // Direct POST with application/json
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
@@ -177,7 +175,6 @@
         }
       } catch (e) {}
 
-      // Proxy Fallback
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
@@ -203,20 +200,26 @@
       if (typeof s === 'string') return s;
       
       const keys = [
-        'busStopNameZh', 'busStopNameTC', 'busStopNameC', 'busStopName',
-        'busStopNameEN', 'busStopNameEn', 'busStopLocation', 'busStopDescription',
-        'busStopRemarkZh', 'busStopRemark', 'stopName', 'stopNameC', 'stopNameZh', 'name'
+        'busStopLocation', 'busStopNameZh', 'busStopNameTC', 'busStopNameC',
+        'busStopDescription', 'stopName', 'stopNameC', 'stopNameZh', 'name',
+        'busStopNameEN', 'busStopNameEn', 'busStopName'
       ];
       
       for (const k of keys) {
-        if (s[k] && typeof s[k] === 'string' && s[k].trim().length > 0) {
-          return s[k].trim();
+        if (s[k] && typeof s[k] === 'string') {
+          const trimmed = s[k].trim();
+          if (trimmed.length > 0 && !/^\d+$/.test(trimmed)) {
+            return trimmed;
+          }
         }
       }
       
       for (const [k, v] of Object.entries(s)) {
-        if (typeof v === 'string' && v.trim().length > 0 && !['busStopId', 'busStopNameNum', 'sequence'].includes(k) && !Array.isArray(v)) {
-          return v.trim();
+        if (typeof v === 'string' && !Array.isArray(v)) {
+          const trimmed = v.trim();
+          if (trimmed.length > 0 && !/^\d+$/.test(trimmed) && !['busStopId', 'sequence'].includes(k)) {
+            return trimmed;
+          }
         }
       }
       
