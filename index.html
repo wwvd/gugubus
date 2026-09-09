@@ -39,7 +39,7 @@
 
     <!-- Search Section (Route View Only) -->
     <div id="searchSection" class="bg-white p-4 rounded-xl shadow-md mb-4">
-      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 102, 960)..." 
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 102, 112, 960)..." 
         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
 
@@ -68,9 +68,32 @@
       if (!name) return '';
       return name
         .replace(/（.*?）|\(.*?\)/g, '')
-        .replace(/巴士總站|總站|特別班次|（循環線）|\(循環線\)|循環線|轉乘站|站|市中心/g, '')
+        .replace(/巴士總站|總站|特別班次|（循環線）|\(循環線\)|循環線|轉乘站|市中心|站/g, '')
         .replace(/[\s\-_]+/g, '')
         .trim();
+    }
+
+    // Check if two route entries belong to the same joint route
+    function isSameJointRoute(r1, r2) {
+      if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
+      
+      const stripNoise = s => s.replace(/（.*?）|\(.*?\)|巴士總站|總站|特別班次|（循環線）|\(循環線\)|循環線|轉乘站|市中心/g, '').replace(/[\s\-_]+/g, '');
+      
+      const t1 = [stripNoise(r1.origTc), stripNoise(r1.destTc)];
+      const t2 = [stripNoise(r2.origTc), stripNoise(r2.destTc)];
+      
+      for (let a of t1) {
+        if (!a || a.length < 2) continue;
+        for (let b of t2) {
+          if (!b || b.length < 2) continue;
+          if (a.includes(b) || b.includes(a)) return true;
+          for (let i = 0; i < a.length - 1; i++) {
+            const sub = a.substring(i, i + 2);
+            if (b.includes(sub)) return true;
+          }
+        }
+      }
+      return false;
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -102,48 +125,41 @@
         }));
 
         const combined = [...kmbRoutes, ...ctbRoutes];
-        const routeMap = new Map();
+        const routeGroups = [];
 
         combined.forEach(r => {
           if (!r.route || !r.origTc || !r.destTc) return;
-          const routeNum = r.route.toUpperCase();
           
-          const origClean = normalizeTerminus(r.origTc);
-          const destClean = normalizeTerminus(r.destTc);
-          const sortedEnds = [origClean, destClean].sort().join('__');
-          const mapKey = `${routeNum}:::${sortedEnds}`;
-
-          if (!routeMap.has(mapKey)) {
-            routeMap.set(mapKey, {
+          let matchedGroup = routeGroups.find(g => isSameJointRoute(g, r));
+          
+          if (!matchedGroup) {
+            matchedGroup = {
               route: r.route,
               companies: new Set(),
-              variants: []
-            });
+              variants: [],
+              origTc: r.origTc,
+              destTc: r.destTc
+            };
+            routeGroups.push(matchedGroup);
           }
-
-          const group = routeMap.get(mapKey);
-          group.companies.add(r.company);
-
-          const isDuplicateVariant = group.variants.some(v => 
+          
+          matchedGroup.companies.add(r.company);
+          
+          const isDuplicateVariant = matchedGroup.variants.some(v => 
             v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType
           );
-
           if (!isDuplicateVariant) {
-            group.variants.push(r);
+            matchedGroup.variants.push(r);
           }
         });
 
-        allRoutes = [];
-        routeMap.forEach((group) => {
-          const defaultVariant = group.variants.find(v => v.serviceType === '1' && (v.bound === 'O' || v.bound.toLowerCase() === 'outbound')) || group.variants[0];
-          allRoutes.push({
-            route: group.route,
-            companies: Array.from(group.companies),
-            variants: group.variants,
-            origTc: defaultVariant.origTc,
-            destTc: defaultVariant.destTc
-          });
-        });
+        allRoutes = routeGroups.map(g => ({
+          route: g.route,
+          companies: Array.from(g.companies),
+          variants: g.variants,
+          origTc: g.origTc,
+          destTc: g.destTc
+        }));
 
         allRoutes.sort((a, b) => a.route.localeCompare(b.route, undefined, { numeric: true, sensitivity: 'base' }));
         renderRoutes(allRoutes);
@@ -267,7 +283,6 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        // Fetch KMB stops if route includes KMB
         if (route.companies.includes('KMB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB') || {};
           const isOutbound = route.dir === 'outbound';
@@ -285,7 +300,6 @@
           }));
         }
 
-        // Fetch CTB stops if route includes CTB
         if (route.companies.includes('CTB')) {
           const isOutbound = route.dir === 'outbound';
           const dir = isOutbound ? 'outbound' : 'inbound';
@@ -302,7 +316,6 @@
           }));
         }
 
-        // Merge stop IDs for joint routes by station name matching
         let finalStops = [];
         if (isJoint && kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
           finalStops = kmbStopsDetailed.map((kStop, index) => {
@@ -360,7 +373,6 @@
       try {
         let fetchPromises = [];
 
-        // Fetch from KMB API if KMB stop ID exists
         if (stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB') || { serviceType: '1' };
           fetchPromises.push(
@@ -371,7 +383,6 @@
           );
         }
 
-        // Fetch from Citybus API if CTB stop ID exists
         if (stop.ctbStopId) {
           fetchPromises.push(
             fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
@@ -426,7 +437,6 @@
           }
         });
 
-        // Combine and sort chronologically
         uniqueEtas.sort((a, b) => a.mins - b.mins);
         const nextETAs = uniqueEtas.slice(0, 4);
 
