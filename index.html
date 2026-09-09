@@ -125,7 +125,7 @@
       const cDest2 = cleanStopName(r2.destTc);
 
       return (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
-             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cOrig1))) ||
+             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cNom2))) ||
              (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
              (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cDest2.includes(cOrig1)));
     }
@@ -166,7 +166,11 @@
         fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({})),
         fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({})),
         fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({})),
-        fetch(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json()).catch(() => ({}))
+        fetch(`${MTR_BASE}/getRoute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ language: 'zh' })
+        }).then(r => r.json()).catch(() => ({}))
       ]);
 
       const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
@@ -447,8 +451,11 @@
         }
 
         if (route.companies.includes('MTRB')) {
-          const mtrUrl = `${MTR_BASE}/getRouteStops?routeName=${encodeURIComponent(route.route)}&language=zh`;
-          const res = await fetch(mtrUrl).then(r => r.json()).catch(() => ({}));
+          const res = await fetch(`${MTR_BASE}/getRouteStops`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ routeName: route.route, language: 'zh' })
+          }).then(r => r.json()).catch(() => ({}));
 
           const rawStops = (res && (res.busStops || res.stops || res.busStop)) || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
@@ -581,9 +588,12 @@
         }
 
         if (stop.mtrStopId) {
-          const mtrEtaUrl = `${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`;
           fetchPromises.push(
-            fetch(mtrEtaUrl)
+            fetch(`${MTR_BASE}/getEstimatedArrival`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ routeName: currentSelectedRoute.route, busStopId: stop.mtrStopId, language: 'zh' })
+            })
               .then(r => r.json())
               .then(res => {
                 let buses = [];
