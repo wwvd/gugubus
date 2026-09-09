@@ -343,7 +343,6 @@
       return origMatch || destMatch || crossMatch1 || crossMatch2;
     }
 
-    // Non-blocking asynchronous background stop preloader
     async function preloadKmbStops() {
       if (kmbAllStopsLoaded) return;
       try {
@@ -415,7 +414,12 @@
       return Math.sqrt(dLat * dLat + dLong * dLong);
     }
 
-    window.addEventListener('DOMContentLoaded', fetchAllRoutes);
+    // Safe execution initializer (Fixes Cloudflare Workers / Edge CDN DOMContentLoaded race condition)
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fetchAllRoutes);
+    } else {
+      fetchAllRoutes();
+    }
 
     async function fetchAllRoutes() {
       showLoading(true);
@@ -423,22 +427,23 @@
       document.getElementById('loadingText').textContent = t('loadingText');
 
       try {
-        // Parallel non-blocking route fetches
         const [kmbRes, ctbRes] = await Promise.all([
           fetchWithRetry(`${KMB_BASE}/route`, {}, 10000, 2).catch(() => null),
           fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 10000, 2).catch(() => null)
         ]);
 
-        // Start preloading stops in background asynchronously without blocking UI
         preloadKmbStops().catch(e => console.warn(e));
 
-        if (!kmbRes && !ctbRes) {
+        const rawKmbData = (kmbRes && Array.isArray(kmbRes.data)) ? kmbRes.data : [];
+        const rawCtbData = (ctbRes && Array.isArray(ctbRes.data)) ? ctbRes.data : [];
+
+        if (rawKmbData.length === 0 && rawCtbData.length === 0) {
           document.getElementById('loadingText').textContent = t('loadError');
           document.getElementById('retryBtn').classList.remove('hidden');
           return;
         }
 
-        const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
+        const kmbRoutes = rawKmbData.map(r => {
           const lwbCheck = isLwbRoute(r.route);
           return {
             company: lwbCheck ? 'LWB' : 'KMB',
@@ -452,7 +457,7 @@
           };
         });
 
-        const ctbRoutes = ((ctbRes && ctbRes.data) || []).map(r => ({
+        const ctbRoutes = rawCtbData.map(r => ({
           company: 'CTB',
           route: r.route ? String(r.route).trim() : '',
           bound: r.bound || 'outbound',
@@ -474,4 +479,688 @@
               route: r.route,
               companies: new Set(),
               variants: [],
-   
+              origTc: r.origTc || r.route,
+              origEn: r.origEn || r.route,
+              destTc: r.destTc || r.route,
+              destEn: r.destEn || r.route
+            };
+            routeGroups.push(matchedGroup);
+          }
+          matchedGroup.companies.add(r.company);
+          const isDuplicateVariant = matchedGroup.variants.some(v => 
+            v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType
+          );
+          if (!isDuplicateVariant) matchedGroup.variants.push(r);
+        });
+
+        allRoutes = routeGroups.map(g => ({
+          route: g.route,
+          companies: Array.from(g.companies),
+          variants: g.variants,
+          origTc: g.origTc,
+          origEn: g.origEn,
+          destTc: g.destTc,
+          destEn: g.destEn
+        }));
+
+        allRoutes.sort((a, b) => a.route.localeCompare(b.route, undefined, { numeric: true, sensitivity: 'base' }));
+        renderRoutes(allRoutes);
+      } catch (err) {
+        console.error("Error loading routes:", err);
+        document.getElementById('loadingText').textContent = t('errorOccurred');
+        document.getElementById('retryBtn').classList.remove('hidden');
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    function setCompanyFilter(co) {
+      activeCompanyFilter = co;
+      document.querySelectorAll('#companyPillGroup button').forEach(btn => {
+        if (btn.getAttribute('data-co') === co) {
+          btn.className = "pill-btn px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]";
+        } else {
+          btn.className = "pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70";
+        }
+      });
+      filterRoutes();
+    }
+
+    function renderRoutes(routes) {
+      const container = document.getElementById('routeListView');
+      container.innerHTML = '';
+      if (routes.length === 0) {
+        container.innerHTML = `<div class="text-center py-8 text-stone-500">${t('notFound')}</div>`;
+        return;
+      }
+      routes.forEach(r => {
+        const card = document.createElement('div');
+        card.className = "bg-white p-4 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 hover:shadow-md transition cursor-pointer flex justify-between items-center";
+        card.onclick = () => selectRoute(r);
+
+        let badgesHtml = '';
+        if (r.companies.includes('KMB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white mr-1 shadow-sm">${t('kmb')}</span>`;
+        if (r.companies.includes('LWB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white mr-1 shadow-sm">${t('lwb')}</span>`;
+        if (r.companies.includes('CTB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950 mr-1 shadow-sm">${t('ctb')}</span>`;
+
+        const origStr = (currentLang === 'en') ? r.origEn : r.origTc;
+        const destStr = (currentLang === 'en') ? r.destEn : r.destTc;
+
+        card.innerHTML = `
+          <div class="flex items-center space-x-3">
+            <div class="flex items-center">${badgesHtml}</div>
+            <span class="text-lg font-bold text-stone-900">${r.route}</span>
+          </div>
+          <div class="text-sm text-stone-600 font-medium">${origStr} ⇄ ${destStr}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function filterRoutes() {
+      const query = document.getElementById('searchInput').value.trim().toUpperCase();
+      const filtered = allRoutes.filter(r => {
+        const matchesQuery = !query || r.route.toUpperCase().includes(query);
+        const matchesCo = (activeCompanyFilter === 'ALL') || r.companies.includes(activeCompanyFilter);
+        return matchesQuery && matchesCo;
+      });
+      renderRoutes(filtered);
+    }
+
+    async function selectRoute(mergedRoute) {
+      stopAutoRefresh();
+      const primaryCompany = mergedRoute.companies[0];
+      const primaryVariant = mergedRoute.variants.find(v => v.company === primaryCompany) || mergedRoute.variants[0];
+
+      currentSelectedRoute = {
+        route: mergedRoute.route,
+        companies: mergedRoute.companies,
+        primaryCompany: primaryCompany,
+        bound: primaryVariant.bound,
+        serviceType: primaryVariant.serviceType || '1',
+        origTc: primaryVariant.origTc,
+        origEn: primaryVariant.origEn,
+        destTc: primaryVariant.destTc,
+        destEn: primaryVariant.destEn,
+        variants: mergedRoute.variants,
+        dir: (primaryVariant.bound === 'O' || primaryVariant.bound?.toLowerCase() === 'outbound') ? 'outbound' : 'inbound'
+      };
+
+      document.getElementById('routeListView').classList.add('hidden');
+      document.getElementById('searchSection').classList.add('hidden');
+      document.getElementById('backBtn').classList.remove('hidden');
+      document.getElementById('appTitleText').textContent = t('appTitleStopList', { route: currentSelectedRoute.route });
+      document.getElementById('infoCard').classList.remove('hidden');
+
+      updateInfoCardUI();
+      loadStopsForCurrentRoute();
+    }
+
+    function updateInfoCardUI() {
+      const headerEl = document.getElementById('selectedRouteHeader');
+      let companyBadges = '';
+      if (currentSelectedRoute.companies.includes('KMB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white">${t('kmb')}</span>`;
+      if (currentSelectedRoute.companies.includes('LWB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white">${t('lwb')}</span>`;
+      if (currentSelectedRoute.companies.includes('CTB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950">${t('ctb')}</span>`;
+
+      headerEl.innerHTML = `
+        <div class="flex items-center space-x-1">${companyBadges}</div>
+        <span class="text-lg font-bold ml-2 text-stone-900">${currentSelectedRoute.route}</span>
+      `;
+
+      const origStr = (currentLang === 'en') ? currentSelectedRoute.origEn : currentSelectedRoute.origTc;
+      const destStr = (currentLang === 'en') ? currentSelectedRoute.destEn : currentSelectedRoute.destTc;
+
+      document.getElementById('selectedRouteDir').textContent = `${origStr} ➔ ${destStr}`;
+      document.getElementById('selectedStopInfo').textContent = t('selectStopPrompt');
+      document.getElementById('etaContainer').innerHTML = "";
+    }
+
+    function toggleDirection() {
+      if (!currentSelectedRoute) return;
+      stopAutoRefresh();
+      
+      const tempTc = currentSelectedRoute.origTc;
+      currentSelectedRoute.origTc = currentSelectedRoute.destTc;
+      currentSelectedRoute.destTc = tempTc;
+
+      const tempEn = currentSelectedRoute.origEn;
+      currentSelectedRoute.origEn = currentSelectedRoute.destEn;
+      currentSelectedRoute.destEn = tempEn;
+
+      currentSelectedRoute.dir = currentSelectedRoute.dir === 'outbound' ? 'inbound' : 'outbound';
+      
+      const origStr = (currentLang === 'en') ? currentSelectedRoute.origEn : currentSelectedRoute.origTc;
+      const destStr = (currentLang === 'en') ? currentSelectedRoute.destEn : currentSelectedRoute.destTc;
+
+      document.getElementById('selectedRouteDir').textContent = `${origStr} ➔ ${destStr}`;
+      document.getElementById('selectedStopInfo').textContent = t('selectStopPrompt');
+      document.getElementById('etaContainer').innerHTML = "";
+      loadStopsForCurrentRoute();
+    }
+
+    function getCompanyDir(company, targetOrig, targetDest, variants) {
+      const cOrig = cleanStopName(targetOrig);
+      const coVariants = variants.filter(v => v.company === company);
+      if (coVariants.length === 0) return null;
+
+      for (const v of coVariants) {
+        const vOrig = cleanStopName(v.origTc);
+        const vDest = cleanStopName(v.destTc);
+
+        if (vOrig && cOrig && (vOrig.includes(cOrig) || cOrig.includes(vOrig))) {
+          const boundStr = (v.bound === 'O' || v.bound === 'outbound') ? 'outbound' : 'inbound';
+          return { dir: boundStr, serviceType: v.serviceType || '1' };
+        }
+        if (vDest && cOrig && (vDest.includes(cOrig) || cOrig.includes(vDest))) {
+          const boundStr = (v.bound === 'O' || v.bound === 'outbound') ? 'inbound' : 'outbound';
+          return { dir: boundStr, serviceType: v.serviceType || '1' };
+        }
+      }
+
+      const first = coVariants[0];
+      const boundStr = (first.bound === 'O' || first.bound === 'outbound') ? 'outbound' : 'inbound';
+      return { dir: boundStr, serviceType: first.serviceType || '1' };
+    }
+
+    async function getActiveKmbServiceTypes(routeNum, dir, variants) {
+      const kmbVars = variants.filter(v => v.company === 'KMB' || v.company === 'LWB');
+      if (kmbVars.length === 0) return ['1'];
+
+      const serviceTypes = Array.from(new Set(kmbVars.map(v => String(v.serviceType || '1'))));
+      if (serviceTypes.length === 1 && serviceTypes[0] === '1') {
+        return ['1'];
+      }
+
+      const activeTypes = [];
+      const checkPromises = serviceTypes.map(async (st) => {
+        const res = await fetchWithRetry(`${KMB_BASE}/route-eta/${routeNum}/${st}`, {}, 4000, 1);
+        if (res && Array.isArray(res.data) && res.data.length > 0) {
+          const hasActiveEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+          if (hasActiveEta) {
+            activeTypes.push(st);
+          }
+        }
+      });
+
+      await Promise.all(checkPromises);
+      return activeTypes.length > 0 ? activeTypes : ['1'];
+    }
+
+    async function getActiveCtbStops(routeNum, rawOut, rawIn, kmbRefStartStop) {
+      const ctbOutDetailed = rawOut.map(s => {
+        const info = ctbStopMap.get(s.stop) || {};
+        return { 
+          stopId: s.stop, 
+          seq: s.seq, 
+          name_tc: info.name_tc || `巴士站 ${s.stop}`, 
+          name_en: info.name_en || `Bus Stop ${s.stop}`, 
+          lat: info.lat, 
+          long: info.long 
+        };
+      });
+
+      const ctbInDetailed = rawIn.map(s => {
+        const info = ctbStopMap.get(s.stop) || {};
+        return { 
+          stopId: s.stop, 
+          seq: s.seq, 
+          name_tc: info.name_tc || `巴士站 ${s.stop}`, 
+          name_en: info.name_en || `Bus Stop ${s.stop}`, 
+          lat: info.lat, 
+          long: info.long 
+        };
+      });
+
+      if (!ctbOutDetailed.length && !ctbInDetailed.length) return [];
+
+      let activeDirStops = ctbOutDetailed;
+      let selectedDirStr = 'outbound';
+
+      if (kmbRefStartStop) {
+        const distOut = ctbOutDetailed.length > 0 ? getGpsDistance(kmbRefStartStop, ctbOutDetailed[0]) : Infinity;
+        const distIn = ctbInDetailed.length > 0 ? getGpsDistance(kmbRefStartStop, ctbInDetailed[0]) : Infinity;
+        if (distIn < distOut) {
+          activeDirStops = ctbInDetailed;
+          selectedDirStr = 'inbound';
+        }
+      }
+
+      const originStop = activeDirStops.length > 0 ? activeDirStops[0].stopId : null;
+      if (originStop) {
+        const etaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${originStop}/${routeNum}`, {}, 4000, 1);
+        const hasLiveEta = etaRes && Array.isArray(etaRes.data) && etaRes.data.some(item => item.eta && String(item.eta).trim() !== '');
+        
+        if (!hasLiveEta) {
+          const altDirStops = (selectedDirStr === 'outbound') ? ctbInDetailed : ctbOutDetailed;
+          if (altDirStops.length > 0) {
+            const altOriginStop = altDirStops[0].stopId;
+            const altEtaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${altOriginStop}/${routeNum}`, {}, 4000, 1);
+            if (altEtaRes && Array.isArray(altEtaRes.data) && altEtaRes.data.some(item => item.eta && String(item.eta).trim() !== '')) {
+              activeDirStops = altDirStops;
+            }
+          }
+        }
+      }
+
+      return activeDirStops;
+    }
+
+    function matchJointStops(kmbStops, ctbStops) {
+      if (!kmbStops || !kmbStops.length) return [];
+      if (!ctbStops || !ctbStops.length) {
+        return kmbStops.map(s => ({ 
+          seq: s.seq, 
+          name_tc: s.name_tc, 
+          name_en: s.name_en, 
+          kmbStopId: s.stopId, 
+          lat: s.lat, 
+          long: s.long 
+        }));
+      }
+
+      const kStartClean = cleanStopName(kmbStops[0].name_tc);
+      const cStartClean = cleanStopName(ctbStops[0].name_tc);
+      const cEndClean = cleanStopName(ctbStops[ctbStops.length - 1].name_tc);
+
+      let alignedCtb = [...ctbStops];
+      const startMatchScore = stringSimilarity(kStartClean, cStartClean);
+      const endMatchScore = stringSimilarity(kStartClean, cEndClean);
+
+      if (endMatchScore > startMatchScore && endMatchScore > 0.3) {
+        alignedCtb.reverse();
+      } else {
+        const dStartStart = getGpsDistance(kmbStops[0], ctbStops[0]);
+        const dStartEnd = getGpsDistance(kmbStops[0], ctbStops[ctbStops.length - 1]);
+        if (dStartEnd < dStartStart && dStartEnd < 0.01) {
+          alignedCtb.reverse();
+        }
+      }
+
+      const usedCtbIndices = new Set();
+      const numK = kmbStops.length;
+      const numC = alignedCtb.length;
+
+      return kmbStops.map((kStop, kIdx) => {
+        const kClean = cleanStopName(kStop.name_tc);
+        let bestCtbIdx = -1;
+        let bestScore = -1;
+
+        const expectedCIdx = Math.round((kIdx / (numK - 1 || 1)) * (numC - 1));
+
+        alignedCtb.forEach((cStop, cIdx) => {
+          if (usedCtbIndices.has(cIdx)) return;
+          if (Math.abs(cIdx - expectedCIdx) > 6) return;
+
+          const cClean = cleanStopName(cStop.name_tc);
+          let sim = stringSimilarity(kClean, cClean);
+          const dist = getGpsDistance(kStop, cStop);
+
+          if (dist < 0.003) sim += 0.4;
+
+          if (sim > bestScore && sim > 0.25) {
+            bestScore = sim;
+            bestCtbIdx = cIdx;
+          }
+        });
+
+        if (bestCtbIdx !== -1) {
+          usedCtbIndices.add(bestCtbIdx);
+          return {
+            seq: kStop.seq,
+            name_tc: kStop.name_tc,
+            name_en: kStop.name_en || alignedCtb[bestCtbIdx].name_en,
+            kmbStopId: kStop.stopId,
+            ctbStopId: alignedCtb[bestCtbIdx].stopId,
+            lat: kStop.lat || alignedCtb[bestCtbIdx].lat,
+            long: kStop.long || alignedCtb[bestCtbIdx].long
+          };
+        }
+
+        return {
+          seq: kStop.seq,
+          name_tc: kStop.name_tc,
+          name_en: kStop.name_en,
+          kmbStopId: kStop.stopId,
+          lat: kStop.lat,
+          long: kStop.long
+        };
+      });
+    }
+
+    async function validateActiveStopsViaEta(routeNum, stops, companies) {
+      if (!stops || stops.length === 0) return stops;
+
+      const isCtb = companies.includes('CTB');
+      const isKmb = companies.includes('KMB') || companies.includes('LWB');
+
+      const etaCheckResults = await Promise.all(stops.map(async (stop) => {
+        let hasEta = false;
+
+        if (isCtb && stop.ctbStopId) {
+          const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 3000, 1);
+          if (res && Array.isArray(res.data)) {
+            hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+          }
+        }
+
+        if (!hasEta && isKmb && stop.kmbStopId) {
+          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
+          const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 3000, 1);
+          if (res && Array.isArray(res.data)) {
+            hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+          }
+        }
+
+        return { stopId: stop.kmbStopId || stop.ctbStopId, hasEta };
+      }));
+
+      const totalActiveEtas = etaCheckResults.filter(r => r.hasEta).length;
+
+      if (totalActiveEtas >= 2) {
+        return stops.filter((stop, idx) => {
+          const isStartOrEnd = (idx === 0 || idx === stops.length - 1);
+          const activeInfo = etaCheckResults[idx];
+          if (isStartOrEnd) return true;
+          return activeInfo && activeInfo.hasEta;
+        });
+      }
+
+      return stops;
+    }
+
+    async function loadStopsForCurrentRoute() {
+      showLoading(true);
+      document.getElementById('stopListView').classList.add('hidden');
+
+      try {
+        const route = currentSelectedRoute;
+        let kmbStopsDetailed = [];
+        let ctbStopsDetailed = [];
+
+        if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
+          const kmbConfig = getCompanyDir('KMB', route.origTc, route.destTc, route.variants) || 
+                            getCompanyDir('LWB', route.origTc, route.destTc, route.variants);
+          if (kmbConfig) {
+            const activeServiceTypes = await getActiveKmbServiceTypes(route.route, kmbConfig.dir, route.variants);
+            
+            const stopListPromises = activeServiceTypes.map(st => 
+              fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${st}`, {}, 6000, 2)
+            );
+            const stopListResults = await Promise.all(stopListPromises);
+
+            const rawStopsMap = new Map();
+            stopListResults.forEach(res => {
+              const rawStops = (res && res.data) || [];
+              rawStops.forEach(s => {
+                if (!rawStopsMap.has(s.stop)) {
+                  rawStopsMap.set(s.stop, s);
+                }
+              });
+            });
+
+            const combinedRawStops = Array.from(rawStopsMap.values()).sort((a, b) => a.seq - b.seq);
+
+            kmbStopsDetailed = await Promise.all(combinedRawStops.map(async (s) => {
+              const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
+              return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
+            }));
+          }
+        }
+
+        if (route.companies.includes('CTB')) {
+          const [resOut, resIn] = await Promise.all([
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 6000, 2),
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 6000, 2)
+          ]);
+
+          const rawOut = (resOut && resOut.data) || [];
+          const rawIn = (resIn && resIn.data) || [];
+
+          await Promise.all([
+            getCtbStopsConcurrently(rawOut.map(s => s.stop)),
+            getCtbStopsConcurrently(rawIn.map(s => s.stop))
+          ]);
+
+          ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, kmbStopsDetailed[0]);
+        }
+
+        let finalStops = [];
+        if (kmbStopsDetailed.length > 0) {
+          finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
+        } else if (ctbStopsDetailed.length > 0) {
+          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
+        }
+
+        finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
+        finalStops = await validateActiveStopsViaEta(route.route, finalStops, route.companies);
+
+        finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
+        currentRenderedStops = finalStops;
+        renderStops(finalStops);
+      } catch (err) {
+        console.error("Error loading stops:", err);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    function renderStops(stops) {
+      const container = document.getElementById('stopListView');
+      container.innerHTML = '';
+      container.classList.remove('hidden');
+      stops.forEach(s => {
+        const card = document.createElement('div');
+        card.className = "bg-white p-3.5 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 transition cursor-pointer flex items-center justify-between";
+        card.onclick = () => fetchETA(s, card, false);
+
+        const displayName = (currentLang === 'en') ? (s.name_en || s.name_tc) : s.name_tc;
+        const hasCoords = (s.lat && s.long);
+
+        const mapButtonsHtml = hasCoords ? `
+          <div class="flex items-center space-x-1.5 ml-2 flex-shrink-0" onclick="event.stopPropagation()">
+            <button onclick="openMap(${s.lat}, ${s.long}, event)" title="${t('map')}" class="p-1.5 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-stone-700 hover:text-amber-900 border border-amber-200 transition text-xs font-semibold flex items-center space-x-1 shadow-sm">
+              <span>📍</span>
+              <span class="hidden sm:inline">${t('map')}</span>
+            </button>
+            <button onclick="openStreetView(${s.lat}, ${s.long}, event)" title="${t('streetView')}" class="p-1.5 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-stone-700 hover:text-amber-900 border border-amber-200 transition text-xs font-semibold flex items-center space-x-1 shadow-sm">
+              <span>📷</span>
+              <span class="hidden sm:inline">${t('streetView')}</span>
+            </button>
+          </div>
+        ` : '';
+
+        card.innerHTML = `
+          <div class="flex items-center space-x-3 min-w-0 flex-1">
+            <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
+              ${s.displaySeq || s.seq}
+            </div>
+            <div class="text-md font-medium text-stone-800 truncate">${displayName}</div>
+          </div>
+          ${mapButtonsHtml}
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function parseEtaToDate(item, now) {
+      if (typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond)) {
+        return new Date(now.getTime() + item.arrivalTimeInSecond * 1000);
+      }
+      if (!item.eta) return null;
+      let str = String(item.eta).trim();
+      if (!str) return null;
+
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) {
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        return new Date(`${yyyy}-${mm}-${dd}T${str}`);
+      }
+
+      str = str.replace(' ', 'T');
+      const d = new Date(str);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    async function fetchETA(stop, activeCard, isAutoRefresh = false) {
+      currentSelectedStop = stop;
+      currentActiveCard = activeCard;
+
+      document.querySelectorAll('#stopListView > div').forEach(el => {
+        el.classList.remove('border-amber-600', 'bg-amber-50/80', 'shadow-md');
+      });
+      if (activeCard) activeCard.classList.add('border-amber-600', 'bg-amber-50/80', 'shadow-md');
+
+      const seqNum = stop.displaySeq || stop.seq;
+      const displayName = (currentLang === 'en') ? (stop.name_en || stop.name_tc) : stop.name_tc;
+      document.getElementById('selectedStopInfo').textContent = `${t('selectedStopPrefix')}${seqNum}. ${displayName}`;
+      const etaContainer = document.getElementById('etaContainer');
+
+      if (!isAutoRefresh) {
+        etaContainer.innerHTML = `<span class="text-sm text-stone-500 animate-pulse flex items-center space-x-1"><span>🍄</span><span>${t('fetchingEta')}</span></span>`;
+      }
+
+      try {
+        let fetchPromises = [];
+        const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
+
+        if (stop.kmbStopId) {
+          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
+          const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
+          fetchPromises.push(
+            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`, {}, 5000, 2)
+              .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
+          );
+        }
+
+        if (stop.ctbStopId) {
+          fetchPromises.push(
+            fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`, {}, 5000, 2)
+              .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
+          );
+        }
+
+        const results = await Promise.all(fetchPromises);
+        const rawEtas = results.flat();
+        const now = new Date();
+
+        const formattedEtas = rawEtas
+          .filter(item => item && (item.eta || item.arrivalTimeInSecond !== undefined))
+          .map(item => {
+            const etaDate = parseEtaToDate(item, now);
+            if (!etaDate) return null;
+            let diffMin = Math.round((etaDate - now) / 60000);
+            if (diffMin < 0) {
+              if (seqNum === 1 || diffMin >= -3) diffMin = 0;
+              else return null;
+            }
+            const hh = String(etaDate.getHours()).padStart(2, '0');
+            const mm = String(etaDate.getMinutes()).padStart(2, '0');
+            
+            let co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
+            if (routeIsLwb && co !== 'CTB') {
+              co = 'LWB';
+            }
+
+            const rmkStr = (currentLang === 'en') ? (item.rmk_en || item.rmk_tc || '') : (item.rmk_tc || item.rmk_en || '');
+
+            return {
+              company: co,
+              mins: diffMin,
+              exactTime: `${hh}:${mm}`,
+              rmk: rmkStr,
+              rawTime: etaDate.getTime()
+            };
+          })
+          .filter(item => item !== null);
+
+        const uniqueEtas = [];
+        const seen = new Set();
+        formattedEtas.forEach(item => {
+          const key = `${item.company}-${item.exactTime}-${item.mins}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            uniqueEtas.push(item);
+          }
+        });
+
+        uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
+        const nextETAs = uniqueEtas.slice(0, 3);
+        etaContainer.innerHTML = '';
+
+        if (nextETAs.length === 0) {
+          etaContainer.innerHTML = `<span class="text-sm text-rose-600 font-medium">${t('noEta')}</span>`;
+        } else {
+          nextETAs.forEach((item, idx) => {
+            const badge = document.createElement('div');
+            badge.className = "bg-[#7a4831] text-amber-50 text-sm font-semibold px-3 py-1.5 rounded-xl shadow-sm flex items-center space-x-2 border border-[#633824]";
+            
+            let durationLabel = item.mins === 0 ? (seqNum === 1 ? t('departing') : t('arriving')) : `${item.mins} ${t('mins')}`;
+            let coBg = 'bg-amber-400 text-amber-950';
+            let coName = t('ctb');
+
+            if (item.company === 'KMB') { 
+              coBg = 'bg-red-700 text-white'; 
+              coName = t('kmb'); 
+            } else if (item.company === 'LWB') { 
+              coBg = 'bg-teal-700 text-white'; 
+              coName = t('lwb'); 
+            }
+
+            const companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
+            const rmkTag = item.rmk ? `<span class="text-xs bg-amber-200/20 px-1.5 py-0.5 rounded text-amber-200 font-normal">${item.rmk}</span>` : '';
+
+            const tripLabel = t('busTrip', { n: idx + 1 });
+
+            badge.innerHTML = `
+              <div class="flex items-center space-x-1.5">
+                ${companyBadgeHtml}
+                <span>${tripLabel}: ${durationLabel} (${item.exactTime})</span>
+                ${rmkTag}
+              </div>
+            `;
+            etaContainer.appendChild(badge);
+          });
+        }
+
+        if (!isAutoRefresh) startAutoRefresh();
+      } catch (err) {
+        if (!isAutoRefresh) {
+          etaContainer.innerHTML = `<span class="text-sm text-rose-600">${t('etaError')}</span>`;
+        }
+      }
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      autoRefreshTimer = setInterval(() => {
+        if (currentSelectedStop) fetchETA(currentSelectedStop, currentActiveCard, true);
+      }, 5000);
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
+    }
+
+    function showRouteList() {
+      stopAutoRefresh();
+      document.getElementById('routeListView').classList.remove('hidden');
+      document.getElementById('searchSection').classList.remove('hidden');
+      document.getElementById('stopListView').classList.add('hidden');
+      document.getElementById('infoCard').classList.add('hidden');
+      document.getElementById('backBtn').classList.add('hidden');
+      document.getElementById('appTitleText').textContent = t('appTitle');
+    }
+
+    function showLoading(isLoading) {
+      const loader = document.getElementById('loading');
+      if (isLoading) loader.classList.remove('hidden');
+      else loader.classList.add('hidden');
+    }
+  </script>
+</body>
+</html>
