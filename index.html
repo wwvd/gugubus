@@ -75,7 +75,6 @@
     const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
     const MTR_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus";
 
-    // Official MTR Bus Route Definitions (Required because DATA.GOV.HK provides no route list endpoint for MTR)
     const MTR_ROUTES = [
       { route: '506', origTc: '屯門碼頭', destTc: '兆麟' },
       { route: 'K12', origTc: '大埔墟站', destTc: '八號花園' },
@@ -113,7 +112,6 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
-    // Fallback Proxy Resolver for GET requests
     async function fetchWithProxyFallback(url, options = {}, timeoutMs = 7000) {
       const fetchAttempt = async (targetUrl) => {
         const controller = new AbortController();
@@ -141,12 +139,28 @@
       return await fetchAttempt(`https://thingproxy.freeboard.io/fetch/${url}`);
     }
 
-    // Dedicated POST Fetcher for MTR Bus Schedule Endpoint
     async function fetchMtrSchedule(routeName) {
       const url = `${MTR_BASE}/getSchedule`;
       const payload = { language: 'zh', routeName: routeName };
 
-      // Try Direct POST First
+      // Direct POST using text/plain header to bypass CORS OPTIONS preflight
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          const json = await res.json();
+          if (json && (json.busStop || json.busStops)) return json;
+        }
+      } catch (e) {}
+
+      // Direct POST with application/json
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
@@ -157,25 +171,56 @@
           signal: controller.signal
         });
         clearTimeout(timer);
-        if (res.ok) return await res.json();
+        if (res.ok) {
+          const json = await res.json();
+          if (json && (json.busStop || json.busStops)) return json;
+        }
       } catch (e) {}
 
-      // Proxy Fallback for POST using corsproxy.io
+      // Proxy Fallback
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 6000);
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
         const res = await fetch(proxyUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify(payload),
           signal: controller.signal
         });
         clearTimeout(timer);
-        if (res.ok) return await res.json();
+        if (res.ok) {
+          const json = await res.json();
+          if (json && (json.busStop || json.busStops)) return json;
+        }
       } catch (e) {}
 
       return null;
+    }
+
+    function getMtrStopName(s, idx) {
+      if (!s) return `車站 ${idx + 1}`;
+      if (typeof s === 'string') return s;
+      
+      const keys = [
+        'busStopNameZh', 'busStopNameTC', 'busStopNameC', 'busStopName',
+        'busStopNameEN', 'busStopNameEn', 'busStopLocation', 'busStopDescription',
+        'busStopRemarkZh', 'busStopRemark', 'stopName', 'stopNameC', 'stopNameZh', 'name'
+      ];
+      
+      for (const k of keys) {
+        if (s[k] && typeof s[k] === 'string' && s[k].trim().length > 0) {
+          return s[k].trim();
+        }
+      }
+      
+      for (const [k, v] of Object.entries(s)) {
+        if (typeof v === 'string' && v.trim().length > 0 && !['busStopId', 'busStopNameNum', 'sequence'].includes(k) && !Array.isArray(v)) {
+          return v.trim();
+        }
+      }
+      
+      return s.busStopId ? `車站 (${s.busStopId})` : `車站 ${idx + 1}`;
     }
 
     function cleanStopName(name) {
@@ -310,7 +355,6 @@
 
         combined.forEach(r => {
           if (!r.route) return;
-          
           let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
           if (!matchedGroup) {
             matchedGroup = {
@@ -322,7 +366,6 @@
             };
             routeGroups.push(matchedGroup);
           }
-          
           matchedGroup.companies.add(r.company);
           const isDuplicateVariant = matchedGroup.variants.some(v => 
             v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType && v.nlbRouteId === r.nlbRouteId
@@ -523,7 +566,7 @@
           mtrStopsDetailed = rawStops.map((s, idx) => ({
             stopId: String(s.busStopId || s.stopId || s.id || ''),
             seq: parseInt(s.busStopNameNum || s.sequence || (idx + 1), 10),
-            name: s.busStopNameZh || s.busStopNameTC || s.busStopName || s.busStopNameEN || `車站 ${idx+1}`
+            name: getMtrStopName(s, idx)
           }));
           if (route.dir === 'inbound' && mtrStopsDetailed.length > 0) {
             mtrStopsDetailed.reverse();
