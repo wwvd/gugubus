@@ -104,27 +104,34 @@
         .trim();
     }
 
+    // Identifies Hong Kong Joint Cross-Harbour routes (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, N3xx, N6xx, N9xx, etc.)
     function isJointRouteNumber(routeNum) {
       if (!routeNum) return false;
       const norm = routeNum.trim().toUpperCase();
-      return /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d|X1\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(norm);
+      return /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d|X1\d\d|R3\d\d|R6\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(norm);
     }
 
     function isSameRouteGroup(r1, r2) {
       if (!r1?.route || !r2?.route) return false;
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
+      
+      // Same operator and same route number -> Group together
       if (r1.company === r2.company) return true;
-      if (isJointRouteNumber(r1.route)) return true;
+
+      // Different operators with same route number -> ONLY group if it is a Joint Cross-Harbour Route AND origins/destinations match
+      if (!isJointRouteNumber(r1.route)) return false;
 
       const cOrig1 = cleanStopName(r1.origTc);
       const cDest1 = cleanStopName(r1.destTc);
       const cOrig2 = cleanStopName(r2.origTc);
       const cDest2 = cleanStopName(r2.destTc);
 
-      return (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
-             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest2))) ||
-             (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
-             (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cDest2.includes(cOrig1)));
+      const origMatch = (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1)));
+      const destMatch = (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest2)));
+      const crossMatch1 = (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1)));
+      const crossMatch2 = (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cDest2.includes(cOrig1)));
+
+      return origMatch || destMatch || crossMatch1 || crossMatch2;
     }
 
     async function getStopDetail(company, stopId) {
@@ -360,7 +367,7 @@
 
         let finalStops = [];
 
-        // Combine stops for Joint-operated routes across KMB & CTB
+        // For Joint-Operated Routes: Merge stop lists and indicate company names if stop naming differs
         if (kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
           const ctbMatchedIndices = new Set();
 
@@ -388,7 +395,7 @@
               
               let displayName = kStop.name;
               if (cStop.name && kStop.name !== cStop.name && cleanStopName(kStop.name) !== cleanStopName(cStop.name)) {
-                displayName = `${kStop.name} / ${cStop.name}`;
+                displayName = `九巴: ${kStop.name} / 城巴: ${cStop.name}`;
               }
 
               finalStops.push({
@@ -400,7 +407,7 @@
             } else {
               finalStops.push({
                 seq: kStop.seq,
-                name: kStop.name,
+                name: `九巴: ${kStop.name}`,
                 kmbStopId: kStop.stopId
               });
             }
@@ -410,7 +417,7 @@
             if (!ctbMatchedIndices.has(cIdx)) {
               finalStops.push({
                 seq: cStop.seq + 0.5,
-                name: cStop.name,
+                name: `城巴: ${cStop.name}`,
                 ctbStopId: cStop.stopId
               });
             }
