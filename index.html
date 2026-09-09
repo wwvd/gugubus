@@ -266,11 +266,12 @@
     }
 
     async function fetchWithRetry(url, options = {}, timeoutMs = 12000, retries = 3) {
+      const fetchOpts = { ...options, cache: 'no-store' };
       for (let i = 0; i < retries; i++) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
-          const response = await fetch(url, { ...options, signal: controller.signal });
+          const response = await fetch(url, { ...fetchOpts, signal: controller.signal });
           clearTimeout(timer);
           if (response.ok) {
             const json = await response.json();
@@ -280,7 +281,7 @@
           clearTimeout(timer);
         }
         if (i < retries - 1) {
-          await new Promise(res => setTimeout(res, 500));
+          await new Promise(res => setTimeout(res, 400));
         }
       }
       return null;
@@ -602,7 +603,6 @@
       if (!currentSelectedRoute) return;
       stopAutoRefresh();
       
-      // Reset stop selection state
       currentSelectedStop = null;
       currentActiveCard = null;
       currentRenderedStops = [];
@@ -615,7 +615,6 @@
       currentSelectedRoute.origEn = currentSelectedRoute.destEn;
       currentSelectedRoute.destEn = tempEn;
 
-      // Toggle direction state explicitly
       currentSelectedRoute.dir = (currentSelectedRoute.dir === 'outbound') ? 'inbound' : 'outbound';
       
       const origStr = (currentLang === 'en') ? currentSelectedRoute.origEn : currentSelectedRoute.origTc;
@@ -634,7 +633,6 @@
 
       const targetBoundChar = (targetDir === 'inbound') ? 'I' : 'O';
 
-      // 1. Direct bound match ('I' or 'O')
       const exactMatch = coVariants.find(v => 
         v.bound === targetBoundChar || 
         (v.bound && v.bound.toLowerCase() === targetDir.toLowerCase())
@@ -646,7 +644,6 @@
         };
       }
 
-      // 2. Origin stop matching fallback
       const cOrig = cleanStopName(targetOrig);
       for (const v of coVariants) {
         const vOrig = cleanStopName(v.origTc);
@@ -656,7 +653,6 @@
         }
       }
 
-      // 3. Fallback to targetDir
       const first = coVariants[0];
       return { dir: targetDir, serviceType: first.serviceType || '1' };
     }
@@ -712,12 +708,10 @@
 
       if (!ctbOutDetailed.length && !ctbInDetailed.length) return [];
 
-      // Explicitly select based on target direction
       let activeDirStops = (targetDir === 'inbound') 
         ? (ctbInDetailed.length ? ctbInDetailed : ctbOutDetailed) 
         : (ctbOutDetailed.length ? ctbOutDetailed : ctbInDetailed);
 
-      // If joint route with KMB reference stop, verify alignment
       if (kmbRefStartStop && ctbOutDetailed.length > 0 && ctbInDetailed.length > 0) {
         const distOut = getGpsDistance(kmbRefStartStop, ctbOutDetailed[0]);
         const distIn = getGpsDistance(kmbRefStartStop, ctbInDetailed[0]);
@@ -818,6 +812,7 @@
 
       const isCtb = companies.includes('CTB');
       const isKmb = companies.includes('KMB') || companies.includes('LWB');
+      const targetBoundChar = (currentSelectedRoute.dir === 'outbound') ? 'O' : 'I';
 
       const etaCheckResults = await Promise.all(stops.map(async (stop) => {
         let hasEta = false;
@@ -825,7 +820,11 @@
         if (isCtb && stop.ctbStopId) {
           const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 4000, 1);
           if (res && Array.isArray(res.data)) {
-            hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+            hasEta = res.data.some(item => 
+              item.eta && 
+              String(item.eta).trim() !== '' &&
+              (!item.dir || item.dir.toUpperCase() === targetBoundChar)
+            );
           }
         }
 
@@ -833,7 +832,11 @@
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 4000, 1);
           if (res && Array.isArray(res.data)) {
-            hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+            hasEta = res.data.some(item => 
+              item.eta && 
+              String(item.eta).trim() !== '' &&
+              (!item.dir || item.dir.toUpperCase() === targetBoundChar)
+            );
           }
         }
 
@@ -865,7 +868,6 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        // 1. Fetch KMB / LWB Master Stop Sequence for target direction
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
@@ -896,7 +898,6 @@
           }
         }
 
-        // 2. Query Citybus API in real-time for CTB Route Stops for target direction
         if (route.companies.includes('CTB')) {
           const [resOut, resIn] = await Promise.all([
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
@@ -914,7 +915,6 @@
           ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, kmbStopsDetailed[0], route.dir);
         }
 
-        // 3. Anchor / merge stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
@@ -922,10 +922,7 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
-        // 4. Apply Universal Calendar & Pedestrian Zone Filtering
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
-
-        // 5. Apply Universal Real-Time ETA Probing
         finalStops = await validateActiveStopsViaEta(route.route, finalStops, route.companies);
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
@@ -984,14 +981,6 @@
       let str = String(item.eta).trim();
       if (!str) return null;
 
-      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) {
-        const yyyy = now.getFullYear();
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        const dd = String(now.getDate()).padStart(2, '0');
-        return new Date(`${yyyy}-${mm}-${dd}T${str}`);
-      }
-
-      str = str.replace(' ', 'T');
       const d = new Date(str);
       return isNaN(d.getTime()) ? null : d;
     }
@@ -1017,6 +1006,7 @@
       try {
         let fetchPromises = [];
         const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
+        const targetBoundChar = (currentSelectedRoute.dir === 'outbound') ? 'O' : 'I';
 
         if (stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
@@ -1038,8 +1028,28 @@
         const rawEtas = results.flat();
         const now = new Date();
 
+        const targetDestTc = cleanStopName(currentSelectedRoute.destTc);
+
         const formattedEtas = rawEtas
-          .filter(item => item && (item.eta || item.arrivalTimeInSecond !== undefined))
+          .filter(item => {
+            if (!item || (!item.eta && item.arrivalTimeInSecond === undefined)) return false;
+            
+            // 1. Direction Bound Matching (O vs I)
+            if (item.dir && item.dir.toUpperCase() !== targetBoundChar) {
+              return false;
+            }
+
+            // 2. Secondary Destination Matching (Handles Circular Routes)
+            if (item.dest_tc && targetDestTc) {
+              const itemDestClean = cleanStopName(item.dest_tc);
+              if (itemDestClean && !itemDestClean.includes(targetDestTc) && !targetDestTc.includes(itemDestClean)) {
+                // If directions match explicitly, allow slight name discrepancies
+                if (!item.dir) return false;
+              }
+            }
+
+            return true;
+          })
           .map(item => {
             const etaDate = parseEtaToDate(item, now);
             if (!etaDate) return null;
