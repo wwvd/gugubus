@@ -102,6 +102,60 @@
       return /^(A\d|E\d|NA\d|S\d|R\d|N30|N31|N39|N42|N64|X33|X34|X36|X43|X47)/.test(r);
     }
 
+    // Check HK Public Holidays
+    function isHongKongPublicHoliday(date) {
+      const y = date.getFullYear();
+      const m = date.getMonth() + 1;
+      const d = date.getDate();
+      const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+
+      const hkHolidays = new Set([
+        '2026-01-01', '2026-02-17', '2026-02-18', '2026-02-19', '2026-04-03', '2026-04-04', 
+        '2026-04-06', '2026-05-01', '2026-05-25', '2026-06-19', '2026-07-01', '2026-09-26', 
+        '2026-10-01', '2026-10-19', '2026-12-25', '2026-12-26',
+        '2027-01-01', '2027-02-06', '2027-02-07', '2027-02-08', '2027-03-26', '2027-03-27', 
+        '2027-03-29', '2027-04-05', '2027-05-01', '2027-05-13', '2027-06-09', '2027-07-01', 
+        '2027-09-16', '2027-10-01', '2027-10-08', '2027-12-25', '2027-12-27'
+      ]);
+
+      return hkHolidays.has(dateStr);
+    }
+
+    function isSundayOrPublicHoliday(date = new Date()) {
+      return date.getDay() === 0 || isHongKongPublicHoliday(date);
+    }
+
+    // Check if Central Chater Road Pedestrian Zone is active (Sunday & Public Holidays 07:00-24:00)
+    function isChaterRoadPedestrianZoneActive(date = new Date()) {
+      const isSunPH = isSundayOrPublicHoliday(date);
+      const hour = date.getHours();
+      return isSunPH && (hour >= 7 && hour < 24);
+    }
+
+    function filterPedestrianZoneStops(stops, date = new Date()) {
+      const isPedestrianZoneActive = isChaterRoadPedestrianZoneActive(date);
+
+      return stops.filter(s => {
+        const name = s.name || '';
+        
+        // Stops on Chater Road / Ice House Street / Statue Square (Chater Rd)
+        const isChaterRoadStop = /遮打道|冰廠街|聖佐治大廈.*遮打|皇后像廣場.*遮打/i.test(name) ||
+                                 (s.ctbStopId && ['001032', '001033', '001034'].includes(s.ctbStopId));
+        
+        // Sunday / Public Holiday Diversion stops on Des Voeux Road Central
+        const isChaterDiversionStop = /遮打大廈.*德輔道|歷山大廈.*德輔道|皇后像廣場.*德輔道/i.test(name) ||
+                                     (s.ctbStopId && ['001035', '001036', '001037'].includes(s.ctbStopId));
+
+        if (isPedestrianZoneActive) {
+          if (isChaterRoadStop) return false;
+        } else {
+          if (isChaterDiversionStop) return false;
+        }
+
+        return true;
+      });
+    }
+
     async function fetchWithRetry(url, options = {}, timeoutMs = 12000, retries = 3) {
       for (let i = 0; i < retries; i++) {
         const controller = new AbortController();
@@ -452,7 +506,6 @@
       return { dir: boundStr, serviceType: first.serviceType || '1' };
     }
 
-    // Queries KMB route-eta in real-time to determine which service types are ACTIVE RIGHT NOW
     async function getActiveKmbServiceTypes(routeNum, dir, variants) {
       const kmbVars = variants.filter(v => v.company === 'KMB' || v.company === 'LWB');
       if (kmbVars.length === 0) return ['1'];
@@ -477,7 +530,6 @@
       return activeTypes.length > 0 ? activeTypes : ['1'];
     }
 
-    // Queries Citybus API in real-time to determine active direction and filter inactive special CTB stops
     async function getActiveCtbStops(routeNum, rawOut, rawIn, kmbRefStartStop) {
       const ctbOutDetailed = rawOut.map(s => {
         const info = ctbStopMap.get(s.stop) || {};
@@ -491,7 +543,6 @@
 
       if (!ctbOutDetailed.length && !ctbInDetailed.length) return [];
 
-      // Query Citybus ETA API at origin stops to check for live operating ETAs
       let activeDirStops = ctbOutDetailed;
       let selectedDirStr = 'outbound';
 
@@ -504,13 +555,11 @@
         }
       }
 
-      // Query CTB ETA API for origin stops to confirm live active departures
       const originStop = activeDirStops.length > 0 ? activeDirStops[0].stopId : null;
       if (originStop) {
         const etaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${originStop}/${routeNum}`, {}, 5000, 2);
         const hasLiveEta = etaRes && Array.isArray(etaRes.data) && etaRes.data.some(item => item.eta && String(item.eta).trim() !== '');
         
-        // If preferred direction has no live departures, check alternate direction live CTB ETA
         if (!hasLiveEta) {
           const altDirStops = (selectedDirStr === 'outbound') ? ctbInDetailed : ctbOutDetailed;
           if (altDirStops.length > 0) {
@@ -599,6 +648,49 @@
       });
     }
 
+    // Real-Time ETA Probing: Verifies live active ETAs across all candidate stops
+    async function validateActiveStopsViaEta(routeNum, stops, companies) {
+      if (!stops || stops.length === 0) return stops;
+
+      const isCtb = companies.includes('CTB');
+      const isKmb = companies.includes('KMB') || companies.includes('LWB');
+
+      const etaCheckResults = await Promise.all(stops.map(async (stop) => {
+        let hasEta = false;
+
+        if (isCtb && stop.ctbStopId) {
+          const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 4000, 1);
+          if (res && Array.isArray(res.data)) {
+            hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+          }
+        }
+
+        if (!hasEta && isKmb && stop.kmbStopId) {
+          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
+          const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 4000, 1);
+          if (res && Array.isArray(res.data)) {
+            hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+          }
+        }
+
+        return { stopId: stop.kmbStopId || stop.ctbStopId, hasEta };
+      }));
+
+      const totalActiveEtas = etaCheckResults.filter(r => r.hasEta).length;
+
+      // If the route is currently operating (at least 2 stops return live ETAs)
+      if (totalActiveEtas >= 2) {
+        return stops.filter((stop, idx) => {
+          const isStartOrEnd = (idx === 0 || idx === stops.length - 1);
+          const activeInfo = etaCheckResults[idx];
+          if (isStartOrEnd) return true;
+          return activeInfo && activeInfo.hasEta;
+        });
+      }
+
+      return stops;
+    }
+
     async function loadStopsForCurrentRoute() {
       showLoading(true);
       document.getElementById('stopListView').classList.add('hidden');
@@ -639,7 +731,7 @@
           }
         }
 
-        // 2. Query Citybus API in real-time for CTB Route Stops & Live ETAs
+        // 2. Query Citybus API in real-time for CTB Route Stops
         if (route.companies.includes('CTB')) {
           const [resOut, resIn] = await Promise.all([
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
@@ -657,13 +749,19 @@
           ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, kmbStopsDetailed[0]);
         }
 
-        // 3. Anchor stops strictly on Master Sequence
+        // 3. Anchor / merge stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
         } else if (ctbStopsDetailed.length > 0) {
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
+
+        // 4. Apply Calendar & Pedestrian Zone Filtering (e.g. CTB 1, 2, 5B, 10 Chater Road Sun/PH diversions)
+        finalStops = filterPedestrianZoneStops(finalStops, new Date());
+
+        // 5. Apply Real-Time ETA Probing for Active Stop Validation
+        finalStops = await validateActiveStopsViaEta(route.route, finalStops, route.companies);
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
         renderStops(finalStops);
