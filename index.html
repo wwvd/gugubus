@@ -85,22 +85,27 @@
         .trim();
     }
 
-    // Determines if two routes are genuinely joint-operated cross-harbour routes
+    // Identifies whether a route number belongs to a Cross-Harbour Joint Route (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, etc.)
+    function isJointRouteNumber(routeNum) {
+      const norm = routeNum.trim().toUpperCase();
+      return /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d|X1\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(norm);
+    }
+
     function isSameJointRoute(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       
-      const routeNum = r1.route.toUpperCase();
-      const isCrossHarbourPattern = /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N9\d\d|X\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(routeNum);
-      
+      // Local routes like Route 1, Route 2, Route 5, Route 10 are NEVER merged
+      if (!isJointRouteNumber(r1.route)) return false;
+
       const cOrig1 = cleanStopName(r1.origTc);
       const cDest1 = cleanStopName(r1.destTc);
       const cOrig2 = cleanStopName(r2.origTc);
       const cDest2 = cleanStopName(r2.destTc);
 
-      const isEndpointsMatch = (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) &&
-                               (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1)));
+      const directMatch = (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
+                          (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1)));
 
-      return isCrossHarbourPattern || isEndpointsMatch;
+      return directMatch;
     }
 
     async function getStopDetail(company, stopId) {
@@ -166,7 +171,6 @@
     async function fetchAllRoutes() {
       showLoading(true);
       try {
-        // Fetch route metadata instantly without heavy blocking downloads
         const [kmbRes, ctbRes] = await Promise.all([
           fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
           fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] }))
@@ -516,7 +520,6 @@
           .filter(item => {
             if (!item || !item.eta) return false;
 
-            // Filter out buses heading back to the origin terminal
             if (item.dest_tc) {
               const destClean = cleanStopName(item.dest_tc);
               const origClean = cleanStopName(currentSelectedRoute.origTc);
@@ -530,7 +533,6 @@
             const etaDate = new Date(item.eta);
             let diffMin = Math.round((etaDate - now) / 60000);
             
-            // Preserve scheduled ETAs at start stop or for upcoming departures
             if (diffMin < 0) {
               if (stop.seq === 1 || diffMin >= -3) {
                 diffMin = 0;
@@ -554,7 +556,6 @@
           })
           .filter(item => item !== null);
 
-        // Deduplicate identical ETAs
         const uniqueEtas = [];
         const seen = new Set();
         formattedEtas.forEach(item => {
@@ -565,10 +566,7 @@
           }
         });
 
-        // Sort chronologically
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
-        
-        // Always display top 3 ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
@@ -605,7 +603,6 @@
           });
         }
 
-        // Set 5-second auto-refresh timer
         if (!isAutoRefresh) {
           startAutoRefresh();
         }
@@ -623,7 +620,7 @@
         if (currentSelectedStop) {
           fetchETA(currentSelectedStop, currentActiveCard, true);
         }
-      }, 5000); // 5-second auto refresh
+      }, 5000);
     }
 
     function stopAutoRefresh() {
