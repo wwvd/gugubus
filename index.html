@@ -75,7 +75,6 @@
     const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
     const MTR_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus";
 
-    // Official MTR Bus routes list
     const MTR_ROUTES = [
       { route: '506', origTc: '屯門碼頭', destTc: '兆麟' },
       { route: 'K12', origTc: '大埔墟站', destTc: '八號花園' },
@@ -169,7 +168,7 @@
       const cDest2 = cleanStopName(r2.destTc);
 
       return (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
-             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1))) ||
+             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest2))) ||
              (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
              (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cDest2.includes(cOrig1)));
     }
@@ -476,9 +475,9 @@
             const res = await fetchWithTimeout(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`);
             const rawStops = (res && (res.stops || res.data)) || [];
             nlbStopsDetailed = rawStops.map((s, idx) => ({
-              stopId: String(s.stopId || s.stop_id || ''),
+              stopId: String(s.stopId || s.stop_id || s.id || ''),
               seq: idx + 1,
-              name: s.stopNameC || s.stopNameS || s.stopNameE || `車站 ${idx+1}`,
+              name: s.stopNameC || s.stopNameZh || s.stopNameS || s.stopNameE || `車站 ${idx+1}`,
               nlbRouteId: chosenVariant.nlbRouteId
             }));
           }
@@ -495,7 +494,7 @@
           mtrStopsDetailed = rawStops.map((s, idx) => ({
             stopId: String(s.busStopId || s.stopId || s.id || ''),
             seq: parseInt(s.sequence, 10) || idx + 1,
-            name: s.busStopNameTC || s.busStopName || s.busStopNameEN || `車站 ${idx+1}`
+            name: s.busStopNameC || s.busStopNameTC || s.busStopNameZh || s.busStopName || s.busStopNameEN || `車站 ${idx+1}`
           }));
 
           if (route.dir === 'inbound' && mtrStopsDetailed.length > 0) {
@@ -519,7 +518,7 @@
 
         renderStops(finalStops);
       } catch (err) {
-        alert("無法加載車站列表。");
+        console.error("Error loading stops:", err);
       } finally {
         showLoading(false);
       }
@@ -607,7 +606,7 @@
           fetchPromises.push(
             fetchWithTimeout(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${encodeURIComponent(stop.nlbRouteId)}&stopId=${encodeURIComponent(stop.nlbStopId)}&language=zh`)
               .then(res => ((res && (res.estimatedArrivals || res.data)) || []).map(item => ({
-                eta: item.estimatedArrivalAt || item.estimatedArrival,
+                eta: item.estimatedArrivalAt || item.estimatedArrival || item.estimatedArrivalAtC,
                 co: 'NLB',
                 defaultCo: 'NLB',
                 rmk_tc: item.departed ? '已開出' : (item.noService ? '不提供服務' : '')
