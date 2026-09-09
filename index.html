@@ -73,6 +73,16 @@
     let currentSelectedRoute = null;
     let currentSelectedStop = null;
 
+    // Helper to normalize terminus names across different company APIs (e.g., "美孚" vs "美孚巴士總站")
+    function normalizeTerminus(name) {
+      if (!name) return '';
+      return name
+        .replace(/（.*?）|\(.*?\)/g, '')
+        .replace(/巴士總站|總站|特別班次|（循環線）|\(循環線\)|循環線|轉乘站|站|市中心/g, '')
+        .replace(/[\s\-_]+/g, '')
+        .trim();
+    }
+
     // Initialization
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
 
@@ -105,17 +115,15 @@
         const combined = [...kmbRoutes, ...ctbRoutes];
         const routeMap = new Map();
 
-        // Group joint-operated routes (same route number AND same endpoints) together,
-        // while keeping routes with the same number but different endpoints separate.
         combined.forEach(r => {
           if (!r.route || !r.origTc || !r.destTc) return;
           const routeNum = r.route.toUpperCase();
           
-          // Create a direction-agnostic endpoint signature to group joint routes properly
-          const sortedEnds = [r.origTc.trim(), r.destTc.trim()].sort();
-          const endpointSig = `${sortedEnds[0]}_${sortedEnds[1]}`;
+          const origClean = normalizeTerminus(r.origTc);
+          const destClean = normalizeTerminus(r.destTc);
+          const sortedEnds = [origClean, destClean].sort().join('__');
           
-          const mapKey = `${routeNum}__${endpointSig}`;
+          const mapKey = `${routeNum}:::${sortedEnds}`;
 
           if (!routeMap.has(mapKey)) {
             routeMap.set(mapKey, {
@@ -322,22 +330,46 @@
       document.getElementById('stopListView').classList.add('hidden');
 
       try {
-        let routeStops = [];
         const route = currentSelectedRoute;
+        const isJoint = route.companies.length > 1;
 
+        // Fetch primary active company stops
+        let primaryStops = [];
         if (route.activeCompany === 'KMB') {
           const isOutbound = route.bound.toUpperCase() === 'O';
           const dir = isOutbound ? 'outbound' : 'inbound';
           const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${route.serviceType}`).then(r => r.json());
-          routeStops = res.data || [];
+          primaryStops = res.data || [];
         } else {
           const isOutbound = route.bound.toLowerCase() === 'outbound';
           const dir = isOutbound ? 'outbound' : 'inbound';
           const res = await fetch(`${CTB_BASE}/route-stop/ctb/${route.route}/${dir}`).then(r => r.json());
-          routeStops = res.data || [];
+          primaryStops = res.data || [];
         }
 
-        const stopPromises = routeStops.map(async (s) => {
+        // Fetch secondary company stops for joint routes in parallel to match stop IDs
+        let secondaryStops = [];
+        if (isJoint) {
+          const secondaryCompany = route.companies.find(c => c !== route.activeCompany);
+          const secVariant = route.variants.find(v => v.company === secondaryCompany);
+          if (secVariant) {
+            try {
+              if (secondaryCompany === 'KMB') {
+                const isOutbound = secVariant.bound.toUpperCase() === 'O';
+                const dir = isOutbound ? 'outbound' : 'inbound';
+                const res = await fetch(`${KMB_BASE}/route-stop/${secVariant.route}/${dir}/${secVariant.serviceType}`).then(r => r.json());
+                secondaryStops = res.data || [];
+              } else {
+                const isOutbound = secVariant.bound.toLowerCase() === 'outbound';
+                const dir = isOutbound ? 'outbound' : 'inbound';
+                const res = await fetch(`${CTB_BASE}/route-stop/ctb/${secVariant.route}/${dir}`).then(r => r.json());
+                secondaryStops = res.data || [];
+              }
+            } catch (e) {}
+          }
+        }
+
+        const stopPromises = primaryStops.map(async (s) => {
           let name = `巴士站 ${s.seq}`;
           try {
             const url = route.activeCompany === 'KMB' 
@@ -346,7 +378,11 @@
             const stopRes = await fetch(url).then(r => r.json());
             name = stopRes.data?.name_tc || name;
           } catch (e) {}
-          return { stopId: s.stop, seq: s.seq, name };
+
+          const kmbStopId = route.activeCompany === 'KMB' ? s.stop : (secondaryStops.find(sec => sec.seq === s.seq)?.stop || null);
+          const ctbStopId = route.activeCompany === 'CTB' ? s.stop : (secondaryStops.find(sec => sec.seq === s.seq)?.stop || null);
+
+          return { stopId: s.stop, kmbStopId, ctbStopId, seq: s.seq, name };
         });
 
         const stops = (await Promise.all(stopPromises)).sort((a, b) => a.seq - b.seq);
@@ -391,42 +427,96 @@
       etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
 
       try {
-        let etaData = [];
-        if (currentSelectedRoute.activeCompany === 'KMB') {
-          const res = await fetch(`${KMB_BASE}/eta/${stop.stopId}/${currentSelectedRoute.route}/${currentSelectedRoute.serviceType}`).then(r => r.json());
-          etaData = res.data || [];
+        let allEtas = [];
+        const isJointRoute = currentSelectedRoute.companies.length > 1;
+
+        // Determine targets to query
+        const targets = [];
+        if (isJointRoute) {
+          if (stop.kmbStopId) targets.push({ company: 'KMB', stopId: stop.kmbStopId });
+          if (stop.ctbStopId) targets.push({ company: 'CTB', stopId: stop.ctbStopId });
+          if (targets.length === 0) targets.push({ company: currentSelectedRoute.activeCompany, stopId: stop.stopId });
         } else {
-          const res = await fetch(`${CTB_BASE}/eta/ctb/${stop.stopId}/${currentSelectedRoute.route}`).then(r => r.json());
-          etaData = res.data || [];
+          targets.push({ company: currentSelectedRoute.activeCompany, stopId: stop.stopId });
         }
 
-        const now = new Date();
-        const nextThree = etaData
-          .filter(item => item.eta)
-          .map(item => {
-            const etaDate = new Date(item.eta);
-            const diffMin = Math.round((etaDate - now) / 60000);
-            if (diffMin < 0) return null;
+        const promises = targets.map(async (t) => {
+          try {
+            let etaData = [];
+            if (t.company === 'KMB') {
+              const kmbVariant = currentSelectedRoute.variants.find(v => v.company === 'KMB') || { serviceType: '1' };
+              const res = await fetch(`${KMB_BASE}/eta/${t.stopId}/${currentSelectedRoute.route}/${kmbVariant.serviceType}`).then(r => r.json());
+              etaData = res.data || [];
+            } else if (t.company === 'CTB') {
+              const res = await fetch(`${CTB_BASE}/eta/ctb/${t.stopId}/${currentSelectedRoute.route}`).then(r => r.json());
+              etaData = res.data || [];
+            }
 
-            const hh = String(etaDate.getHours()).padStart(2, '0');
-            const mm = String(etaDate.getMinutes()).padStart(2, '0');
-            const exactTime = `${hh}:${mm}`;
+            const now = new Date();
+            return etaData
+              .filter(item => item.eta)
+              .map(item => {
+                const etaDate = new Date(item.eta);
+                const diffMin = Math.round((etaDate - now) / 60000);
+                if (diffMin < 0) return null;
 
-            return { mins: diffMin, exactTime };
-          })
-          .filter(item => item !== null)
-          .sort((a, b) => a.mins - b.mins)
-          .slice(0, 3);
+                const hh = String(etaDate.getHours()).padStart(2, '0');
+                const mm = String(etaDate.getMinutes()).padStart(2, '0');
+                const exactTime = `${hh}:${mm}`;
+
+                // Prefer API returned company field if present, otherwise default to query target company
+                const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : t.company;
+
+                return { company: co, mins: diffMin, exactTime };
+              })
+              .filter(item => item !== null);
+          } catch (err) {
+            return [];
+          }
+        });
+
+        const results = await Promise.all(promises);
+        results.forEach(arr => allEtas.push(...arr));
+
+        // Deduplicate ETAs with same company, duration and exact time
+        const uniqueEtas = [];
+        const keys = new Set();
+        allEtas.forEach(item => {
+          const key = `${item.company}-${item.exactTime}-${item.mins}`;
+          if (!keys.has(key)) {
+            keys.add(key);
+            uniqueEtas.push(item);
+          }
+        });
+
+        uniqueEtas.sort((a, b) => a.mins - b.mins);
+        const nextETAs = uniqueEtas.slice(0, 4);
 
         etaContainer.innerHTML = '';
-        if (nextThree.length === 0) {
+
+        if (nextETAs.length === 0) {
           etaContainer.innerHTML = `<span class="text-sm text-red-500 font-medium">暫無即時班次資料</span>`;
         } else {
-          nextThree.forEach((item, idx) => {
+          nextETAs.forEach((item, idx) => {
             const badge = document.createElement('div');
-            badge.className = "bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg shadow-sm";
+            badge.className = "bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg shadow-sm flex items-center space-x-2";
+            
             const durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
-            badge.textContent = `第 ${idx + 1} 班: ${durationLabel} (${item.exactTime})`;
+            
+            let companyBadgeHtml = '';
+            if (isJointRoute || item.company) {
+              const isKmb = item.company === 'KMB';
+              const coBg = isKmb ? 'bg-red-700 text-white' : 'bg-yellow-400 text-black';
+              const coName = isKmb ? '九巴' : '城巴';
+              companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
+            }
+
+            badge.innerHTML = `
+              <div class="flex items-center space-x-1.5">
+                ${companyBadgeHtml}
+                <span>第 ${idx + 1} 班: ${durationLabel} (${item.exactTime})</span>
+              </div>
+            `;
             etaContainer.appendChild(badge);
           });
         }
