@@ -75,6 +75,34 @@
     const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
     const MTR_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus";
 
+    // Official MTR Bus Route Definitions (Required because DATA.GOV.HK provides no route list endpoint for MTR)
+    const MTR_ROUTES = [
+      { route: '506', origTc: '屯門碼頭', destTc: '兆麟' },
+      { route: 'K12', origTc: '大埔墟站', destTc: '八號花園' },
+      { route: 'K14', origTc: '大埔超級城', destTc: '大埔墟站' },
+      { route: 'K17', origTc: '富善', destTc: '大埔墟站' },
+      { route: 'K18', origTc: '廣福', destTc: '大埔墟站' },
+      { route: 'K51', origTc: '富泰', destTc: '大欖' },
+      { route: 'K51A', origTc: '富泰', destTc: '掃管笏' },
+      { route: 'K52', origTc: '屯門站', destTc: '龍鼓灘' },
+      { route: 'K52A', origTc: '屯門站', destTc: '曾咀' },
+      { route: 'K52P', origTc: '龍鼓灘', destTc: '屯門站' },
+      { route: 'K53', origTc: '屯門站', destTc: '掃管笏' },
+      { route: 'K54', origTc: '和田邨', destTc: '屯門市中心' },
+      { route: 'K58', origTc: '富泰', destTc: '青山灣' },
+      { route: 'K65', origTc: '元朗站', destTc: '流浮山' },
+      { route: 'K65A', origTc: '天水圍站', destTc: '流浮山' },
+      { route: 'K66', origTc: '朗屏', destTc: '大棠黃泥墩村' },
+      { route: 'K68', origTc: '元朗工業邨', destTc: '元朗公園' },
+      { route: 'K73', origTc: '天恒', destTc: '元朗西' },
+      { route: 'K74', origTc: '天水圍', destTc: '凹頭' },
+      { route: 'K75A', origTc: '天水圍站', destTc: '洪水橋' },
+      { route: 'K75P', origTc: '天瑞', destTc: '洪水橋' },
+      { route: 'K75S', origTc: '洪水橋站', destTc: '洪福邨' },
+      { route: 'K76', origTc: '天恒', destTc: '天水圍站' },
+      { route: 'K76S', origTc: '濕地公園路', destTc: '天水圍站' }
+    ];
+
     let allRoutes = [];
     let currentSelectedRoute = null;
     let currentSelectedStop = null;
@@ -85,7 +113,7 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
-    // Fallback Proxy Resolver
+    // Fallback Proxy Resolver for GET requests
     async function fetchWithProxyFallback(url, options = {}, timeoutMs = 7000) {
       const fetchAttempt = async (targetUrl) => {
         const controller = new AbortController();
@@ -101,20 +129,53 @@
         }
       };
 
-      // 1. Direct Request
       let data = await fetchAttempt(url);
       if (data) return data;
 
-      // 2. Proxy Fallback A: corsproxy.io
       data = await fetchAttempt(`https://corsproxy.io/?${encodeURIComponent(url)}`);
       if (data) return data;
 
-      // 3. Proxy Fallback B: allorigins
       const rawAllOrigins = await fetchAttempt(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
       if (rawAllOrigins) return rawAllOrigins;
 
-      // 4. Proxy Fallback C: thingproxy
       return await fetchAttempt(`https://thingproxy.freeboard.io/fetch/${url}`);
+    }
+
+    // Dedicated POST Fetcher for MTR Bus Schedule Endpoint
+    async function fetchMtrSchedule(routeName) {
+      const url = `${MTR_BASE}/getSchedule`;
+      const payload = { language: 'zh', routeName: routeName };
+
+      // Try Direct POST First
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (res.ok) return await res.json();
+      } catch (e) {}
+
+      // Proxy Fallback for POST using corsproxy.io
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        const res = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (res.ok) return await res.json();
+      } catch (e) {}
+
+      return null;
     }
 
     function cleanStopName(name) {
@@ -193,15 +254,10 @@
       ctbStopMap.clear();
 
       try {
-        const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
+        const [kmbRes, ctbRes, nlbRes] = await Promise.all([
           fetchWithProxyFallback(`${KMB_BASE}/route`),
           fetchWithProxyFallback(`${CTB_BASE}/route/CTB`),
-          fetchWithProxyFallback(`${NLB_BASE}/route.php?action=list`),
-          fetchWithProxyFallback(`${MTR_BASE}/getRoute`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ language: 'zh' })
-          })
+          fetchWithProxyFallback(`${NLB_BASE}/route.php?action=list`)
         ]);
 
         const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
@@ -240,20 +296,14 @@
           };
         });
 
-        const rawMtr = (mtrRes && (mtrRes.busRoutes || mtrRes.routes || mtrRes.bus)) || [];
-        const mtrRoutes = rawMtr.map(r => {
-          const name = String(r.routeName || r.route || '').trim();
-          const desc = r.routeNameZh || r.routeDescription || r.description || '';
-          const parsed = parseEndpoints(desc);
-          return {
-            company: 'MTRB',
-            route: name,
-            bound: 'outbound',
-            serviceType: '1',
-            origTc: parsed.orig || name,
-            destTc: parsed.dest || name
-          };
-        });
+        const mtrRoutes = MTR_ROUTES.map(r => ({
+          company: 'MTRB',
+          route: r.route,
+          bound: 'outbound',
+          serviceType: '1',
+          origTc: r.origTc,
+          destTc: r.destTc
+        }));
 
         const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes, ...mtrRoutes];
         const routeGroups = [];
@@ -468,16 +518,12 @@
         }
 
         if (route.companies.includes('MTRB')) {
-          const res = await fetchWithProxyFallback(`${MTR_BASE}/getSchedule`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ language: 'zh', routeName: route.route })
-          });
+          const res = await fetchMtrSchedule(route.route);
           const rawStops = (res && (res.busStop || res.busStops || res.stops)) || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
             stopId: String(s.busStopId || s.stopId || s.id || ''),
-            seq: parseInt(s.sequence, 10) || idx + 1,
-            name: s.busStopNameC || s.busStopNameTC || s.busStopNameZh || s.busStopName || s.busStopNameEN || `車站 ${idx+1}`
+            seq: parseInt(s.busStopNameNum || s.sequence || (idx + 1), 10),
+            name: s.busStopNameZh || s.busStopNameTC || s.busStopName || s.busStopNameEN || `車站 ${idx+1}`
           }));
           if (route.dir === 'inbound' && mtrStopsDetailed.length > 0) {
             mtrStopsDetailed.reverse();
@@ -590,11 +636,7 @@
 
         if (stop.mtrStopId) {
           fetchPromises.push(
-            fetchWithProxyFallback(`${MTR_BASE}/getSchedule`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ language: 'zh', routeName: currentSelectedRoute.route })
-            }).then(res => {
+            fetchMtrSchedule(currentSelectedRoute.route).then(res => {
               let buses = [];
               if (res && Array.isArray(res.busStop)) {
                 const targetStop = res.busStop.find(bs => String(bs.busStopId) === String(stop.mtrStopId));
@@ -603,7 +645,7 @@
                 }
               }
               return buses.map(b => ({
-                eta: b.arrivalTimeText || b.busArrivalTime || b.departureTimeText,
+                eta: b.arrivalTimeText || b.departureTimeText,
                 arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : (parseInt(b.arrivalTimeInSecond, 10) || undefined),
                 co: 'MTRB',
                 defaultCo: 'MTRB',
