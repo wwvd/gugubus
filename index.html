@@ -274,7 +274,7 @@
       });
     }
 
-    async function fetchWithRetry(url, options = {}, timeoutMs = 12000, retries = 3) {
+    async function fetchWithRetry(url, options = {}, timeoutMs = 8000, retries = 2) {
       for (let i = 0; i < retries; i++) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -289,7 +289,7 @@
           clearTimeout(timer);
         }
         if (i < retries - 1) {
-          await new Promise(res => setTimeout(res, 500));
+          await new Promise(res => setTimeout(res, 400));
         }
       }
       return null;
@@ -343,10 +343,11 @@
       return origMatch || destMatch || crossMatch1 || crossMatch2;
     }
 
+    // Non-blocking asynchronous background stop preloader
     async function preloadKmbStops() {
       if (kmbAllStopsLoaded) return;
       try {
-        const res = await fetchWithRetry(`${KMB_BASE}/stop`, {}, 15000, 2);
+        const res = await fetchWithRetry(`${KMB_BASE}/stop`, {}, 12000, 2);
         if (res && Array.isArray(res.data)) {
           res.data.forEach(s => {
             if (s.stop) {
@@ -361,14 +362,14 @@
           kmbAllStopsLoaded = true;
         }
       } catch (e) {
-        console.warn("Bulk KMB stops preload fallback to individual fetch", e);
+        console.warn("Background KMB stops preload fallback", e);
       }
     }
 
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 8000, 2);
+        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 6000, 2);
         if (res && res.data) {
           const info = { 
             name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
@@ -381,7 +382,7 @@
         }
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 8000, 2);
+        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 6000, 2);
         if (res && res.data) {
           const info = { 
             name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
@@ -422,11 +423,14 @@
       document.getElementById('loadingText').textContent = t('loadingText');
 
       try {
+        // Parallel non-blocking route fetches
         const [kmbRes, ctbRes] = await Promise.all([
-          fetchWithRetry(`${KMB_BASE}/route`, {}, 15000, 3),
-          fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 12000, 3),
-          preloadKmbStops()
+          fetchWithRetry(`${KMB_BASE}/route`, {}, 10000, 2).catch(() => null),
+          fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 10000, 2).catch(() => null)
         ]);
+
+        // Start preloading stops in background asynchronously without blocking UI
+        preloadKmbStops().catch(e => console.warn(e));
 
         if (!kmbRes && !ctbRes) {
           document.getElementById('loadingText').textContent = t('loadError');
@@ -470,10 +474,4 @@
               route: r.route,
               companies: new Set(),
               variants: [],
-              origTc: r.origTc || r.route,
-              origEn: r.origEn || r.route,
-              destTc: r.destTc || r.route,
-              destEn: r.destEn || r.route
-            };
-            routeGroups.push(matchedGroup);
-          
+   
