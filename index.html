@@ -114,7 +114,7 @@
       if (!r1?.route || !r2?.route) return false;
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       if (r1.company === r2.company) return true;
-      if (!isJointRouteNumber(r1.route)) return false;
+      if (isJointRouteNumber(r1.route)) return true;
 
       const cOrig1 = cleanStopName(r1.origTc);
       const cDest1 = cleanStopName(r1.destTc);
@@ -359,7 +359,64 @@
         }
 
         let finalStops = [];
-        if (kmbStopsDetailed.length > 0) {
+
+        // Combine stops for Joint-operated routes across KMB & CTB
+        if (kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
+          const ctbMatchedIndices = new Set();
+
+          kmbStopsDetailed.forEach((kStop, kIdx) => {
+            const kClean = cleanStopName(kStop.name);
+            let bestCtbIdx = -1;
+            let minDistance = Infinity;
+
+            ctbStopsDetailed.forEach((cStop, cIdx) => {
+              if (ctbMatchedIndices.has(cIdx)) return;
+              const cClean = cleanStopName(cStop.name);
+              const isMatch = (kClean && cClean && (kClean === cClean || kClean.includes(cClean) || cClean.includes(kClean)));
+              if (isMatch) {
+                const dist = Math.abs(kIdx - cIdx);
+                if (dist < minDistance) {
+                  minDistance = dist;
+                  bestCtbIdx = cIdx;
+                }
+              }
+            });
+
+            if (bestCtbIdx !== -1) {
+              ctbMatchedIndices.add(bestCtbIdx);
+              const cStop = ctbStopsDetailed[bestCtbIdx];
+              
+              let displayName = kStop.name;
+              if (cStop.name && kStop.name !== cStop.name && cleanStopName(kStop.name) !== cleanStopName(cStop.name)) {
+                displayName = `${kStop.name} / ${cStop.name}`;
+              }
+
+              finalStops.push({
+                seq: kStop.seq,
+                name: displayName,
+                kmbStopId: kStop.stopId,
+                ctbStopId: cStop.stopId
+              });
+            } else {
+              finalStops.push({
+                seq: kStop.seq,
+                name: kStop.name,
+                kmbStopId: kStop.stopId
+              });
+            }
+          });
+
+          ctbStopsDetailed.forEach((cStop, cIdx) => {
+            if (!ctbMatchedIndices.has(cIdx)) {
+              finalStops.push({
+                seq: cStop.seq + 0.5,
+                name: cStop.name,
+                ctbStopId: cStop.stopId
+              });
+            }
+          });
+
+        } else if (kmbStopsDetailed.length > 0) {
           finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId }));
         } else if (ctbStopsDetailed.length > 0) {
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, ctbStopId: s.stopId }));
