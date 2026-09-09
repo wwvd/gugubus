@@ -670,7 +670,7 @@
       const checkPromises = serviceTypes.map(async (st) => {
         const res = await fetchWithRetry(`${KMB_BASE}/route-eta/${routeNum}/${st}`, {}, 5000, 2);
         if (res && Array.isArray(res.data) && res.data.length > 0) {
-          const hasActiveEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
+          const hasActiveEta = res.data.some(item => isValidRealtimeEta(item, (dir === 'outbound' ? 'O' : 'I')));
           if (hasActiveEta) {
             activeTypes.push(st);
           }
@@ -807,12 +807,45 @@
       });
     }
 
+    // Universal Real-time Operating ETA Validator
+    function isValidRealtimeEta(item, targetBoundChar, now = new Date()) {
+      if (!item || (!item.eta && item.arrivalTimeInSecond === undefined)) return false;
+
+      // 1. Direction Bound Filter (Outbound 'O' vs Inbound 'I')
+      if (item.dir && targetBoundChar && item.dir.toUpperCase() !== targetBoundChar) {
+        return false;
+      }
+
+      // 2. End of Service / Off-duty Remark Filter
+      const rmk = (item.rmk_tc || item.rmk_en || item.rmk || '').toLowerCase();
+      if (/(末班車|尾班車|服務已結束|未有班次|暫停服務|out of service|end of service|last bus|no service|finished)/i.test(rmk)) {
+        if (/(已過|已駛離|已結束|已開出|過|passed|ended|closed|departed)/i.test(rmk)) {
+          return false;
+        }
+      }
+
+      // 3. Time Horizon Window Filter
+      const etaDate = parseEtaToDate(item, now);
+      if (!etaDate) return false;
+
+      const diffMin = Math.round((etaDate - now) / 60000);
+
+      // Discard past or stale ETAs (>3 mins ago)
+      if (diffMin < -3) return false;
+
+      // Discard non-operating / tomorrow departures (>120 minutes away)
+      if (diffMin > 120) return false;
+
+      return true;
+    }
+
     async function validateActiveStopsViaEta(routeNum, stops, companies) {
       if (!stops || stops.length === 0) return stops;
 
       const isCtb = companies.includes('CTB');
       const isKmb = companies.includes('KMB') || companies.includes('LWB');
       const targetBoundChar = (currentSelectedRoute.dir === 'outbound') ? 'O' : 'I';
+      const now = new Date();
 
       const etaCheckResults = await Promise.all(stops.map(async (stop) => {
         let hasEta = false;
@@ -820,11 +853,7 @@
         if (isCtb && stop.ctbStopId) {
           const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 4000, 1);
           if (res && Array.isArray(res.data)) {
-            hasEta = res.data.some(item => 
-              item.eta && 
-              String(item.eta).trim() !== '' &&
-              (!item.dir || item.dir.toUpperCase() === targetBoundChar)
-            );
+            hasEta = res.data.some(item => isValidRealtimeEta(item, targetBoundChar, now));
           }
         }
 
@@ -832,11 +861,7 @@
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 4000, 1);
           if (res && Array.isArray(res.data)) {
-            hasEta = res.data.some(item => 
-              item.eta && 
-              String(item.eta).trim() !== '' &&
-              (!item.dir || item.dir.toUpperCase() === targetBoundChar)
-            );
+            hasEta = res.data.some(item => isValidRealtimeEta(item, targetBoundChar, now));
           }
         }
 
@@ -1032,18 +1057,14 @@
 
         const formattedEtas = rawEtas
           .filter(item => {
-            if (!item || (!item.eta && item.arrivalTimeInSecond === undefined)) return false;
-            
-            // 1. Direction Bound Matching (O vs I)
-            if (item.dir && item.dir.toUpperCase() !== targetBoundChar) {
+            if (!isValidRealtimeEta(item, targetBoundChar, now)) {
               return false;
             }
 
-            // 2. Secondary Destination Matching (Handles Circular Routes)
+            // Secondary Destination Matching (Handles Circular Routes)
             if (item.dest_tc && targetDestTc) {
               const itemDestClean = cleanStopName(item.dest_tc);
               if (itemDestClean && !itemDestClean.includes(targetDestTc) && !targetDestTc.includes(itemDestClean)) {
-                // If directions match explicitly, allow slight name discrepancies
                 if (!item.dir) return false;
               }
             }
@@ -1052,12 +1073,9 @@
           })
           .map(item => {
             const etaDate = parseEtaToDate(item, now);
-            if (!etaDate) return null;
             let diffMin = Math.round((etaDate - now) / 60000);
-            if (diffMin < 0) {
-              if (seqNum === 1 || diffMin >= -3) diffMin = 0;
-              else return null;
-            }
+            if (diffMin < 0) diffMin = 0;
+
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
             
@@ -1075,8 +1093,7 @@
               rmk: rmkStr,
               rawTime: etaDate.getTime()
             };
-          })
-          .filter(item => item !== null);
+          });
 
         const uniqueEtas = [];
         const seen = new Set();
