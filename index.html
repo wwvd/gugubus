@@ -8,7 +8,6 @@
 </head>
 <body class="bg-amber-50/50 min-h-screen text-stone-800 font-sans">
 
-  <!-- Header -->
   <header class="bg-[#5c3a21] text-amber-100 p-4 shadow-md sticky top-0 z-50 flex justify-between items-center h-[60px] border-b border-[#472c18]">
     <div class="flex items-center space-x-2">
       <button id="backBtn" class="hidden text-sm bg-[#472c18] hover:bg-[#362111] text-amber-200 px-3 py-1.5 rounded-xl transition border border-amber-900/40 flex items-center space-x-1" onclick="showRouteList()">
@@ -24,7 +23,6 @@
 
   <main class="max-w-3xl mx-auto p-4">
 
-    <!-- Selected Info Banner -->
     <div id="infoCard" class="hidden sticky top-[60px] z-40 bg-[#fdfbf7]/95 backdrop-blur-md p-4 rounded-2xl shadow-md mb-4 border border-amber-200/80 transition-all">
       <div class="flex justify-between items-start mb-1">
         <div id="selectedRouteHeader" class="flex items-center space-x-2"></div>
@@ -38,12 +36,10 @@
       <div id="etaContainer" class="mt-3 flex flex-wrap gap-2"></div>
     </div>
 
-    <!-- Search & Company Filter Section -->
     <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4 space-y-3">
       <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 101, A21, K51, 3M)..." 
         class="w-full px-4 py-2 border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-700 focus:border-amber-700 bg-amber-50/20 placeholder-stone-400">
       
-      <!-- Company Filter Pills -->
       <div class="flex flex-wrap gap-1.5 text-xs font-semibold pt-1" id="companyPillGroup">
         <button onclick="setCompanyFilter('ALL')" class="pill-btn active px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]" data-co="ALL">全部</button>
         <button onclick="setCompanyFilter('KMB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="KMB">九巴</button>
@@ -54,17 +50,13 @@
       </div>
     </div>
 
-    <!-- Loading Spinner -->
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
       <p class="mt-3 text-stone-600 font-medium">實時載入最新路線數據中...</p>
     </div>
 
-    <!-- Route List View -->
     <div id="routeListView" class="space-y-2"></div>
-
-    <!-- Stop List View -->
     <div id="stopListView" class="hidden space-y-2"></div>
 
   </main>
@@ -74,6 +66,8 @@
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
     const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
     const MTR_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus";
+
+    const PROXY_URL = "https://api.allorigins.win/raw?url=";
 
     const MTR_ROUTES = [
       { route: '506', origTc: '屯門碼頭', destTc: '兆麟' },
@@ -124,6 +118,11 @@
         clearTimeout(timer);
         return null;
       }
+    }
+
+    async function fetchProxy(targetUrl, options = {}) {
+      const proxiedUrl = PROXY_URL + encodeURIComponent(targetUrl);
+      return await fetchWithTimeout(proxiedUrl, options);
     }
 
     function cleanStopName(name) {
@@ -205,7 +204,7 @@
         const [kmbRes, ctbRes, nlbRes] = await Promise.all([
           fetchWithTimeout(`${KMB_BASE}/route`),
           fetchWithTimeout(`${CTB_BASE}/route/CTB`),
-          fetchWithTimeout(`${NLB_BASE}/route.php?action=list`)
+          fetchProxy(`${NLB_BASE}/route.php?action=list`)
         ]);
 
         const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
@@ -258,9 +257,7 @@
 
         combined.forEach(r => {
           if (!r.route) return;
-          
           let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
-          
           if (!matchedGroup) {
             matchedGroup = {
               route: r.route,
@@ -271,15 +268,11 @@
             };
             routeGroups.push(matchedGroup);
           }
-          
           matchedGroup.companies.add(r.company);
-          
           const isDuplicateVariant = matchedGroup.variants.some(v => 
             v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType && v.nlbRouteId === r.nlbRouteId
           );
-          if (!isDuplicateVariant) {
-            matchedGroup.variants.push(r);
-          }
+          if (!isDuplicateVariant) matchedGroup.variants.push(r);
         });
 
         allRoutes = routeGroups.map(g => ({
@@ -314,12 +307,10 @@
     function renderRoutes(routes) {
       const container = document.getElementById('routeListView');
       container.innerHTML = '';
-
       if (routes.length === 0) {
         container.innerHTML = `<div class="text-center py-8 text-stone-500">找不到相關路線 🍄</div>`;
         return;
       }
-
       routes.forEach(r => {
         const card = document.createElement('div');
         card.className = "bg-white p-4 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 hover:shadow-md transition cursor-pointer flex justify-between items-center";
@@ -374,7 +365,6 @@
       document.getElementById('searchSection').classList.add('hidden');
       document.getElementById('backBtn').classList.remove('hidden');
       document.getElementById('appTitle').innerHTML = `<span>🍄</span><span>路線 ${currentSelectedRoute.route} 車站列表</span>`;
-
       document.getElementById('infoCard').classList.remove('hidden');
 
       updateInfoCardUI();
@@ -383,7 +373,6 @@
 
     function updateInfoCardUI() {
       const headerEl = document.getElementById('selectedRouteHeader');
-      
       let companyBadges = '';
       if (currentSelectedRoute.companies.includes('KMB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white">九巴</span>`;
       if (currentSelectedRoute.companies.includes('LWB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white">龍運</span>`;
@@ -395,7 +384,6 @@
         <div class="flex items-center space-x-1">${companyBadges}</div>
         <span class="text-lg font-bold ml-2 text-stone-900">${currentSelectedRoute.route}</span>
       `;
-
       document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
       document.getElementById('selectedStopInfo').textContent = "請選擇下方車站查看到站時間";
       document.getElementById('etaContainer').innerHTML = "";
@@ -404,13 +392,10 @@
     function toggleDirection() {
       if (!currentSelectedRoute) return;
       stopAutoRefresh();
-
       const temp = currentSelectedRoute.origTc;
       currentSelectedRoute.origTc = currentSelectedRoute.destTc;
       currentSelectedRoute.destTc = temp;
-
       currentSelectedRoute.dir = currentSelectedRoute.dir === 'outbound' ? 'inbound' : 'outbound';
-
       document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
       document.getElementById('selectedStopInfo').textContent = "請選擇下方車站";
       document.getElementById('etaContainer').innerHTML = "";
@@ -421,18 +406,14 @@
       const nlbVars = route.variants.filter(v => v.company === 'NLB');
       if (nlbVars.length === 0) return null;
       if (nlbVars.length === 1) return nlbVars[0];
-
       const curOrig = cleanStopName(route.origTc);
       const curDest = cleanStopName(route.destTc);
-
-      const match = nlbVars.find(v => {
+      return nlbVars.find(v => {
         const vOrig = cleanStopName(v.origTc);
         const vDest = cleanStopName(v.destTc);
         return (vOrig.includes(curOrig) || curOrig.includes(vOrig)) &&
                (vDest.includes(curDest) || curDest.includes(vDest));
-      });
-
-      return match || nlbVars[0];
+      }) || nlbVars[0];
     }
 
     async function loadStopsForCurrentRoute() {
@@ -451,7 +432,6 @@
           const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
           const res = await fetchWithTimeout(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`);
           const rawStops = (res && res.data) || [];
-
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             const info = await getStopDetail('KMB', s.stop);
             return { stopId: s.stop, seq: s.seq, name: info.name };
@@ -462,7 +442,6 @@
           const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
           const res = await fetchWithTimeout(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`);
           const rawStops = (res && res.data) || [];
-
           ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
             return { stopId: s.stop, seq: s.seq, name: info.name };
@@ -472,7 +451,7 @@
         if (route.companies.includes('NLB')) {
           const chosenVariant = getActiveNlbVariant(route);
           if (chosenVariant && chosenVariant.nlbRouteId) {
-            const res = await fetchWithTimeout(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`);
+            const res = await fetchProxy(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`);
             const rawStops = (res && (res.stops || res.data)) || [];
             nlbStopsDetailed = rawStops.map((s, idx) => ({
               stopId: String(s.stopId || s.stop_id || s.id || ''),
@@ -484,19 +463,17 @@
         }
 
         if (route.companies.includes('MTRB')) {
-          const res = await fetchWithTimeout(`${MTR_BASE}/getSchedule`, {
+          const res = await fetchProxy(`${MTR_BASE}/getSchedule`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ language: 'zh', routeName: route.route })
           });
-
           const rawStops = (res && (res.busStop || res.busStops || res.stops)) || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
             stopId: String(s.busStopId || s.stopId || s.id || ''),
             seq: parseInt(s.sequence, 10) || idx + 1,
             name: s.busStopNameC || s.busStopNameTC || s.busStopNameZh || s.busStopName || s.busStopNameEN || `車站 ${idx+1}`
           }));
-
           if (route.dir === 'inbound' && mtrStopsDetailed.length > 0) {
             mtrStopsDetailed.reverse();
           }
@@ -515,7 +492,6 @@
 
         finalStops.sort((a, b) => a.seq - b.seq);
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
-
         renderStops(finalStops);
       } catch (err) {
         console.error("Error loading stops:", err);
@@ -528,12 +504,10 @@
       const container = document.getElementById('stopListView');
       container.innerHTML = '';
       container.classList.remove('hidden');
-
       stops.forEach(s => {
         const card = document.createElement('div');
         card.className = "bg-white p-3.5 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 transition cursor-pointer flex items-center space-x-3";
         card.onclick = () => fetchETA(s, card, false);
-
         card.innerHTML = `
           <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
             ${s.displaySeq || s.seq}
@@ -549,17 +523,14 @@
         return new Date(now.getTime() + item.arrivalTimeInSecond * 1000);
       }
       if (!item.eta) return null;
-
       let str = String(item.eta).trim();
       if (!str) return null;
-
       if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) {
         const yyyy = now.getFullYear();
         const mm = String(now.getMonth() + 1).padStart(2, '0');
         const dd = String(now.getDate()).padStart(2, '0');
         return new Date(`${yyyy}-${mm}-${dd}T${str}`);
       }
-
       str = str.replace(' ', 'T');
       const d = new Date(str);
       return isNaN(d.getTime()) ? null : d;
@@ -572,9 +543,7 @@
       document.querySelectorAll('#stopListView > div').forEach(el => {
         el.classList.remove('border-amber-600', 'bg-amber-50/80', 'shadow-md');
       });
-      if (activeCard) {
-        activeCard.classList.add('border-amber-600', 'bg-amber-50/80', 'shadow-md');
-      }
+      if (activeCard) activeCard.classList.add('border-amber-600', 'bg-amber-50/80', 'shadow-md');
 
       const seqNum = stop.displaySeq || stop.seq;
       document.getElementById('selectedStopInfo').textContent = `已選車站：${seqNum}. ${stop.name}`;
@@ -604,7 +573,7 @@
 
         if (stop.nlbStopId && stop.nlbRouteId) {
           fetchPromises.push(
-            fetchWithTimeout(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${encodeURIComponent(stop.nlbRouteId)}&stopId=${encodeURIComponent(stop.nlbStopId)}&language=zh`)
+            fetchProxy(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${encodeURIComponent(stop.nlbRouteId)}&stopId=${encodeURIComponent(stop.nlbStopId)}&language=zh`)
               .then(res => ((res && (res.estimatedArrivals || res.data)) || []).map(item => ({
                 eta: item.estimatedArrivalAt || item.estimatedArrival || item.estimatedArrivalAtC,
                 co: 'NLB',
@@ -616,27 +585,26 @@
 
         if (stop.mtrStopId) {
           fetchPromises.push(
-            fetchWithTimeout(`${MTR_BASE}/getSchedule`, {
+            fetchProxy(`${MTR_BASE}/getSchedule`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ language: 'zh', routeName: currentSelectedRoute.route })
-            })
-              .then(res => {
-                let buses = [];
-                if (res && Array.isArray(res.busStop)) {
-                  const targetStop = res.busStop.find(bs => String(bs.busStopId) === String(stop.mtrStopId));
-                  if (targetStop && Array.isArray(targetStop.bus)) {
-                    buses = targetStop.bus;
-                  }
+            }).then(res => {
+              let buses = [];
+              if (res && Array.isArray(res.busStop)) {
+                const targetStop = res.busStop.find(bs => String(bs.busStopId) === String(stop.mtrStopId));
+                if (targetStop && Array.isArray(targetStop.bus)) {
+                  buses = targetStop.bus;
                 }
-                return buses.map(b => ({
-                  eta: b.arrivalTimeText || b.busArrivalTime || b.departureTimeText,
-                  arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : (parseInt(b.arrivalTimeInSecond, 10) || undefined),
-                  co: 'MTRB',
-                  defaultCo: 'MTRB',
-                  rmk_tc: b.busRemark || b.remarks || ''
-                }));
-              })
+              }
+              return buses.map(b => ({
+                eta: b.arrivalTimeText || b.busArrivalTime || b.departureTimeText,
+                arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : (parseInt(b.arrivalTimeInSecond, 10) || undefined),
+                co: 'MTRB',
+                defaultCo: 'MTRB',
+                rmk_tc: b.busRemark || b.remarks || ''
+              }));
+            })
           );
         }
 
@@ -649,13 +617,11 @@
           .map(item => {
             const etaDate = parseEtaToDate(item, now);
             if (!etaDate) return null;
-
             let diffMin = Math.round((etaDate - now) / 60000);
             if (diffMin < 0) {
               if (seqNum === 1 || diffMin >= -3) diffMin = 0;
               else return null;
             }
-
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
             const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
@@ -682,7 +648,6 @@
 
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
         const nextETAs = uniqueEtas.slice(0, 3);
-
         etaContainer.innerHTML = '';
 
         if (nextETAs.length === 0) {
@@ -691,7 +656,6 @@
           nextETAs.forEach((item, idx) => {
             const badge = document.createElement('div');
             badge.className = "bg-[#7a4831] text-amber-50 text-sm font-semibold px-3 py-1.5 rounded-xl shadow-sm flex items-center space-x-2 border border-[#633824]";
-            
             let durationLabel = item.mins === 0 ? (seqNum === 1 ? '即將開出' : '即將到站') : `${item.mins} 分鐘`;
             let coBg = 'bg-amber-400 text-amber-950';
             let coName = '城巴';
@@ -716,7 +680,6 @@
         }
 
         if (!isAutoRefresh) startAutoRefresh();
-
       } catch (err) {
         if (!isAutoRefresh) {
           etaContainer.innerHTML = `<span class="text-sm text-rose-600">無法獲取實時數據</span>`;
@@ -727,9 +690,7 @@
     function startAutoRefresh() {
       stopAutoRefresh();
       autoRefreshTimer = setInterval(() => {
-        if (currentSelectedStop) {
-          fetchETA(currentSelectedStop, currentActiveCard, true);
-        }
+        if (currentSelectedStop) fetchETA(currentSelectedStop, currentActiveCard, true);
       }, 5000);
     }
 
