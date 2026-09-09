@@ -274,7 +274,7 @@
       });
     }
 
-    async function fetchWithRetry(url, options = {}, timeoutMs = 8000, retries = 2) {
+    async function fetchWithRetry(url, options = {}, timeoutMs = 12000, retries = 3) {
       for (let i = 0; i < retries; i++) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -289,7 +289,7 @@
           clearTimeout(timer);
         }
         if (i < retries - 1) {
-          await new Promise(res => setTimeout(res, 400));
+          await new Promise(res => setTimeout(res, 500));
         }
       }
       return null;
@@ -346,7 +346,7 @@
     async function preloadKmbStops() {
       if (kmbAllStopsLoaded) return;
       try {
-        const res = await fetchWithRetry(`${KMB_BASE}/stop`, {}, 12000, 2);
+        const res = await fetchWithRetry(`${KMB_BASE}/stop`, {}, 15000, 2);
         if (res && Array.isArray(res.data)) {
           res.data.forEach(s => {
             if (s.stop) {
@@ -361,14 +361,14 @@
           kmbAllStopsLoaded = true;
         }
       } catch (e) {
-        console.warn("Background KMB stops preload fallback", e);
+        console.warn("Bulk KMB stops preload fallback to individual fetch", e);
       }
     }
 
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 6000, 2);
+        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 8000, 2);
         if (res && res.data) {
           const info = { 
             name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
@@ -381,7 +381,7 @@
         }
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 6000, 2);
+        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 8000, 2);
         if (res && res.data) {
           const info = { 
             name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
@@ -414,12 +414,7 @@
       return Math.sqrt(dLat * dLat + dLong * dLong);
     }
 
-    // Safe execution initializer (Fixes Cloudflare Workers / Edge CDN DOMContentLoaded race condition)
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', fetchAllRoutes);
-    } else {
-      fetchAllRoutes();
-    }
+    window.addEventListener('DOMContentLoaded', fetchAllRoutes);
 
     async function fetchAllRoutes() {
       showLoading(true);
@@ -428,22 +423,18 @@
 
       try {
         const [kmbRes, ctbRes] = await Promise.all([
-          fetchWithRetry(`${KMB_BASE}/route`, {}, 10000, 2).catch(() => null),
-          fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 10000, 2).catch(() => null)
+          fetchWithRetry(`${KMB_BASE}/route`, {}, 15000, 3),
+          fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 12000, 3),
+          preloadKmbStops()
         ]);
 
-        preloadKmbStops().catch(e => console.warn(e));
-
-        const rawKmbData = (kmbRes && Array.isArray(kmbRes.data)) ? kmbRes.data : [];
-        const rawCtbData = (ctbRes && Array.isArray(ctbRes.data)) ? ctbRes.data : [];
-
-        if (rawKmbData.length === 0 && rawCtbData.length === 0) {
+        if (!kmbRes && !ctbRes) {
           document.getElementById('loadingText').textContent = t('loadError');
           document.getElementById('retryBtn').classList.remove('hidden');
           return;
         }
 
-        const kmbRoutes = rawKmbData.map(r => {
+        const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
           const lwbCheck = isLwbRoute(r.route);
           return {
             company: lwbCheck ? 'LWB' : 'KMB',
@@ -457,7 +448,7 @@
           };
         });
 
-        const ctbRoutes = rawCtbData.map(r => ({
+        const ctbRoutes = ((ctbRes && ctbRes.data) || []).map(r => ({
           company: 'CTB',
           route: r.route ? String(r.route).trim() : '',
           bound: r.bound || 'outbound',
@@ -674,7 +665,7 @@
 
       const activeTypes = [];
       const checkPromises = serviceTypes.map(async (st) => {
-        const res = await fetchWithRetry(`${KMB_BASE}/route-eta/${routeNum}/${st}`, {}, 4000, 1);
+        const res = await fetchWithRetry(`${KMB_BASE}/route-eta/${routeNum}/${st}`, {}, 5000, 2);
         if (res && Array.isArray(res.data) && res.data.length > 0) {
           const hasActiveEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
           if (hasActiveEta) {
@@ -728,14 +719,14 @@
 
       const originStop = activeDirStops.length > 0 ? activeDirStops[0].stopId : null;
       if (originStop) {
-        const etaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${originStop}/${routeNum}`, {}, 4000, 1);
+        const etaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${originStop}/${routeNum}`, {}, 5000, 2);
         const hasLiveEta = etaRes && Array.isArray(etaRes.data) && etaRes.data.some(item => item.eta && String(item.eta).trim() !== '');
         
         if (!hasLiveEta) {
           const altDirStops = (selectedDirStr === 'outbound') ? ctbInDetailed : ctbOutDetailed;
           if (altDirStops.length > 0) {
             const altOriginStop = altDirStops[0].stopId;
-            const altEtaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${altOriginStop}/${routeNum}`, {}, 4000, 1);
+            const altEtaRes = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${altOriginStop}/${routeNum}`, {}, 5000, 2);
             if (altEtaRes && Array.isArray(altEtaRes.data) && altEtaRes.data.some(item => item.eta && String(item.eta).trim() !== '')) {
               activeDirStops = altDirStops;
             }
@@ -838,7 +829,7 @@
         let hasEta = false;
 
         if (isCtb && stop.ctbStopId) {
-          const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 3000, 1);
+          const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 4000, 1);
           if (res && Array.isArray(res.data)) {
             hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
           }
@@ -846,7 +837,7 @@
 
         if (!hasEta && isKmb && stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
-          const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 3000, 1);
+          const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 4000, 1);
           if (res && Array.isArray(res.data)) {
             hasEta = res.data.some(item => item.eta && String(item.eta).trim() !== '');
           }
@@ -878,6 +869,7 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
+        // 1. Fetch KMB / LWB Master Stop Sequence for ACTIVE service types
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.origTc, route.destTc, route.variants);
@@ -885,7 +877,7 @@
             const activeServiceTypes = await getActiveKmbServiceTypes(route.route, kmbConfig.dir, route.variants);
             
             const stopListPromises = activeServiceTypes.map(st => 
-              fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${st}`, {}, 6000, 2)
+              fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${st}`, {}, 8000, 2)
             );
             const stopListResults = await Promise.all(stopListPromises);
 
@@ -908,10 +900,11 @@
           }
         }
 
+        // 2. Query Citybus API in real-time for CTB Route Stops
         if (route.companies.includes('CTB')) {
           const [resOut, resIn] = await Promise.all([
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 6000, 2),
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 6000, 2)
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 8000, 2)
           ]);
 
           const rawOut = (resOut && resOut.data) || [];
@@ -925,6 +918,7 @@
           ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, kmbStopsDetailed[0]);
         }
 
+        // 3. Anchor / merge stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
@@ -932,7 +926,10 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
+        // 4. Apply Universal Calendar & Pedestrian Zone Filtering for ALL Routes
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
+
+        // 5. Apply Universal Real-Time ETA Probing for Active Stop Validation across ALL Routes
         finalStops = await validateActiveStopsViaEta(route.route, finalStops, route.companies);
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
@@ -1029,14 +1026,14 @@
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
           fetchPromises.push(
-            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`, {}, 5000, 2)
+            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`, {}, 6000, 2)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
           );
         }
 
         if (stop.ctbStopId) {
           fetchPromises.push(
-            fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`, {}, 5000, 2)
+            fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`, {}, 6000, 2)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
           );
         }
