@@ -91,38 +91,38 @@
       const day = now.getDay();
       const isSunday = (day === 0);
 
-      // Detect if the route passes through Central Chater Road vs Des Voeux Road Central
-      const hasStatueSquare = stops.some(s => (s.name || '').includes('皇后像廣場'));
-      const hasAlexandraOrChaterGarden = stops.some(s => (s.name || '').includes('歷山大廈') || (s.name || '').includes('遮打花園'));
+      const checkName = (s, substring) => {
+        const kName = s.kmbName || s.name || '';
+        const cName = s.ctbName || s.name || '';
+        return kName.includes(substring) || cName.includes(substring);
+      };
+
+      const hasStatueSquare = stops.some(s => checkName(s, '皇后像廣場'));
+      const hasAlexandraOrChaterGarden = stops.some(s => checkName(s, '歷山大廈') || checkName(s, '遮打花園'));
 
       return stops.filter(s => {
-        const name = s.name || '';
+        const kName = s.kmbName || s.name || '';
+        const cName = s.ctbName || s.name || '';
 
-        // 1. Central / Chater Road Pedestrian Zone Diversions (Sunday / Public Holiday)
         if (hasStatueSquare && hasAlexandraOrChaterGarden) {
           if (!isSunday) {
-            // Mon-Sat: Filter out Sunday/Holiday diversion stops
-            if (name.includes('歷山大廈') || name.includes('遮打花園')) return false;
+            if (kName.includes('歷山大廈') || kName.includes('遮打花園') || cName.includes('歷山大廈') || cName.includes('遮打花園')) return false;
           } else {
-            // Sunday: Filter out weekday Chater Road stops
-            if (name.includes('皇后像廣場') || (name.includes('遮打道') && !name.includes('德輔道中'))) return false;
+            if (kName.includes('皇后像廣場') || cName.includes('皇后像廣場')) return false;
           }
         }
 
-        // 2. Generic Schedule Keywords embedded in Stop Names across any HK route
         if (!isSunday) {
-          // On Mon-Sat, filter out Sunday/Holiday-only stops
-          if (name.includes('只限星期日及公眾假期') || 
-              name.includes('星期日及公眾假期特別') || 
-              name.includes('星期日及假期') ||
-              name.includes('假日特別班')) {
+          if (kName.includes('只限星期日及公眾假期') || cName.includes('只限星期日及公眾假期') ||
+              kName.includes('星期日及公眾假期特別') || cName.includes('星期日及公眾假期特別') ||
+              kName.includes('星期日及假期') || cName.includes('星期日及假期') ||
+              kName.includes('假日特別班') || cName.includes('假日特別班')) {
             return false;
           }
         } else {
-          // On Sunday/Holidays, filter out Mon-Sat only stops
-          if (name.includes('星期日及公眾假期除外') || 
-              name.includes('只限星期一至六') || 
-              name.includes('星期一至六適用')) {
+          if (kName.includes('星期日及公眾假期除外') || cName.includes('星期日及公眾假期除外') ||
+              kName.includes('只限星期一至六') || cName.includes('只限星期一至六') ||
+              kName.includes('星期一至六適用') || cName.includes('星期一至六適用')) {
             return false;
           }
         }
@@ -140,7 +140,6 @@
     function isSameJointRoute(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       
-      // Local routes like Route 1, Route 2, Route 5, Route 10 are NEVER merged
       if (!isJointRouteNumber(r1.route)) return false;
 
       const cOrig1 = cleanStopName(r1.origTc);
@@ -480,20 +479,36 @@
             return {
               seq: kStop.seq,
               name: kStop.name,
+              kmbName: kStop.name,
+              ctbName: matchedCtb ? matchedCtb.name : null,
               kmbStopId: kStop.stopId,
               ctbStopId: matchedCtb ? matchedCtb.stopId : null
             };
           });
         } else if (kmbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId, ctbStopId: null }));
+          finalStops = kmbStopsDetailed.map(s => ({
+            seq: s.seq,
+            name: s.name,
+            kmbName: s.name,
+            ctbName: null,
+            kmbStopId: s.stopId,
+            ctbStopId: null
+          }));
         } else {
-          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: null, ctbStopId: s.stopId }));
+          finalStops = ctbStopsDetailed.map(s => ({
+            seq: s.seq,
+            name: s.name,
+            kmbName: null,
+            ctbName: s.name,
+            kmbStopId: null,
+            ctbStopId: s.stopId
+          }));
         }
 
         // Sort chronologically by sequence
         finalStops.sort((a, b) => a.seq - b.seq);
 
-        // Apply Universal Calendar-Aware Stop Filtering (Applies to ALL bus routes)
+        // Apply Universal Calendar-Aware Stop Filtering
         finalStops = filterCalendarAwareStops(finalStops, route.route);
 
         // Re-number sequence numbers to maintain clean 1..N order
@@ -519,11 +534,47 @@
         card.className = "bg-white p-3.5 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 transition cursor-pointer flex items-center space-x-3";
         card.onclick = () => fetchETA(s, card, false);
 
+        let stopNameHtml = '';
+        if (s.kmbName && s.ctbName) {
+          if (s.kmbName === s.ctbName) {
+            stopNameHtml = `<div class="text-md font-medium text-stone-800">${s.kmbName}</div>`;
+          } else {
+            stopNameHtml = `
+              <div class="flex flex-col text-sm font-medium space-y-1">
+                <div class="flex items-center space-x-1.5 text-stone-800">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white flex-shrink-0">九巴</span>
+                  <span>${s.kmbName}</span>
+                </div>
+                <div class="flex items-center space-x-1.5 text-stone-700">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-400 text-amber-950 flex-shrink-0">城巴</span>
+                  <span>${s.ctbName}</span>
+                </div>
+              </div>
+            `;
+          }
+        } else if (s.kmbName) {
+          stopNameHtml = `
+            <div class="flex items-center space-x-1.5 text-md font-medium text-stone-800">
+              ${currentSelectedRoute.companies.length > 1 ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white flex-shrink-0">九巴</span>' : ''}
+              <span>${s.kmbName}</span>
+            </div>
+          `;
+        } else if (s.ctbName) {
+          stopNameHtml = `
+            <div class="flex items-center space-x-1.5 text-md font-medium text-stone-800">
+              ${currentSelectedRoute.companies.length > 1 ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-400 text-amber-950 flex-shrink-0">城巴</span>' : ''}
+              <span>${s.ctbName}</span>
+            </div>
+          `;
+        } else {
+          stopNameHtml = `<div class="text-md font-medium text-stone-800">${s.name}</div>`;
+        }
+
         card.innerHTML = `
           <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
             ${s.displaySeq || s.seq}
           </div>
-          <div class="text-md font-medium text-stone-800">${s.name}</div>
+          ${stopNameHtml}
         `;
         container.appendChild(card);
       });
@@ -541,7 +592,20 @@
       }
 
       const seqNum = stop.displaySeq || stop.seq;
-      document.getElementById('selectedStopInfo').textContent = `已選車站：${seqNum}. ${stop.name}`;
+      let displayName = stop.name;
+      if (stop.kmbName && stop.ctbName) {
+        if (stop.kmbName === stop.ctbName) {
+          displayName = stop.kmbName;
+        } else {
+          displayName = `九巴: ${stop.kmbName} | 城巴: ${stop.ctbName}`;
+        }
+      } else if (stop.kmbName) {
+        displayName = stop.kmbName;
+      } else if (stop.ctbName) {
+        displayName = stop.ctbName;
+      }
+
+      document.getElementById('selectedStopInfo').textContent = `已選車站：${seqNum}. ${displayName}`;
       const etaContainer = document.getElementById('etaContainer');
 
       if (!isAutoRefresh) {
