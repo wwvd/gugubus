@@ -88,10 +88,9 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
-    function fetchFresh(url, options = {}) {
+    function fetchFresh(url) {
       const sep = url.includes('?') ? '&' : '?';
-      const freshUrl = `${url}${sep}_t=${Date.now()}`;
-      return fetch(freshUrl, options);
+      return fetch(`${url}${sep}_t=${Date.now()}`);
     }
 
     function cleanStopName(name) {
@@ -301,15 +300,17 @@
 
         const rawNlb = nlbRes.routes || nlbRes.data || [];
         const nlbRoutes = rawNlb.map(r => {
-          const tcName = r.routeNameTC || r.routeName_tc || r.routeName || r.route_name_tc || '';
+          const tcName = r.routeNameC || r.routeNameTC || r.routeName_tc || r.routeName || '';
           const parsed = parseRouteEndpoints(tcName);
+          const orig = r.origNameC || r.origNameTC || r.orig_tc || parsed.orig;
+          const dest = r.destNameC || r.destNameTC || r.dest_tc || parsed.dest;
           return {
             company: 'NLB',
-            route: String(r.routeNo || r.route_no || '').trim(),
+            route: String(r.routeNo || r.route_no || r.routeName || '').trim(),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig || r.origNameTC || r.orig_tc || '嶼巴起點',
-            destTc: parsed.dest || r.destNameTC || r.dest_tc || '嶼巴終點',
+            origTc: orig || '起點',
+            destTc: dest || '終點',
             nlbRouteId: String(r.routeId || r.route_id || '')
           };
         });
@@ -324,8 +325,8 @@
             route: name,
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig || '港鐵巴士起點',
-            destTc: parsed.dest || '港鐵巴士終點'
+            origTc: parsed.orig || '起點',
+            destTc: parsed.dest || '終點'
           };
         });
 
@@ -600,7 +601,7 @@
             const res = await fetchFresh(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
             const rawStops = res.stops || res.data || [];
             nlbStopsDetailed = rawStops.map((s, idx) => {
-              const stopName = s.stopNameTC || s.stopName_tc || s.stopName_c || s.stopNameEN || s.stopName || `車站 ${idx+1}`;
+              const stopName = s.stopNameC || s.stopNameTC || s.stopName_tc || s.stopName_c || s.stopNameEN || s.stopName || `車站 ${idx+1}`;
               return {
                 stopId: String(s.stopId || s.stop_id),
                 seq: idx + 1,
@@ -799,7 +800,16 @@
             fetchFresh(mtrEtaUrl)
               .then(r => r.json())
               .then(res => {
-                const buses = res.bus || res.busStops?.[0]?.bus || res.busStop?.[0]?.bus || res.estimatedArrivals || [];
+                let buses = [];
+                if (res.busStops && res.busStops.length > 0 && res.busStops[0].bus) {
+                  buses = res.busStops[0].bus;
+                } else if (res.busStop && res.busStop.length > 0 && res.busStop[0].bus) {
+                  buses = res.busStop[0].bus;
+                } else if (res.bus) {
+                  buses = res.bus;
+                } else if (res.estimatedArrivals) {
+                  buses = res.estimatedArrivals;
+                }
                 return buses.map(b => ({
                   eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
                   arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : undefined,
