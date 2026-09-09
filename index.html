@@ -807,33 +807,53 @@
       });
     }
 
-    // Universal Real-time Operating ETA Validator
+    // Universal Real-time Operating ETA Validator for ALL HK Bus Routes
     function isValidRealtimeEta(item, targetBoundChar, now = new Date()) {
-      if (!item || (!item.eta && item.arrivalTimeInSecond === undefined)) return false;
+      if (!item) return false;
 
-      // 1. Direction Bound Filter (Outbound 'O' vs Inbound 'I')
-      if (item.dir && targetBoundChar && item.dir.toUpperCase() !== targetBoundChar) {
-        return false;
-      }
+      const hasEtaString = item.eta && String(item.eta).trim() !== '';
+      const hasEtaSeconds = typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond);
+      if (!hasEtaString && !hasEtaSeconds) return false;
 
-      // 2. End of Service / Off-duty Remark Filter
-      const rmk = (item.rmk_tc || item.rmk_en || item.rmk || '').toLowerCase();
-      if (/(末班車|尾班車|服務已結束|未有班次|暫停服務|out of service|end of service|last bus|no service|finished)/i.test(rmk)) {
-        if (/(已過|已駛離|已結束|已開出|過|passed|ended|closed|departed)/i.test(rmk)) {
+      // 1. Direction Bound Matching (Outbound 'O' vs Inbound 'I')
+      if (item.dir && targetBoundChar) {
+        const itemDirUpper = String(item.dir).trim().toUpperCase();
+        const targetUpper = String(targetBoundChar).trim().toUpperCase();
+        if (itemDirUpper !== targetUpper && 
+           !(itemDirUpper.startsWith('O') && targetUpper === 'O') && 
+           !(itemDirUpper.startsWith('I') && targetUpper === 'I')) {
           return false;
         }
       }
 
-      // 3. Time Horizon Window Filter
+      // 2. Comprehensive Off-Service / Non-Operating Remark Filter
+      const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
+      
+      const offServiceKeywords = [
+        '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
+        '服務已結束', '服務結束', '非服務時間', '非營運時間', '非營運時段', '暫停服務', '未有班次', '班次未定',
+        '已過總站', '已駛離', '已開出',
+        'last bus passed', 'last bus departed', 'end of service', 'out of service', 'service ended', 'no service',
+        '九巴班次', '城巴班次', '龍運班次', '新巴班次', 'kmb schedule', 'ctb schedule'
+      ];
+
+      for (const kw of offServiceKeywords) {
+        if (rmk.includes(kw)) {
+          return false;
+        }
+      }
+
+      // 3. Time Calculations
       const etaDate = parseEtaToDate(item, now);
       if (!etaDate) return false;
 
-      const diffMin = Math.round((etaDate - now) / 60000);
+      const diffMs = etaDate.getTime() - now.getTime();
+      const diffMin = Math.round(diffMs / 60000);
 
-      // Discard past or stale ETAs (>3 mins ago)
-      if (diffMin < -3) return false;
+      // Strict Cutoff: Discard past departures (more than 1 minute ago)
+      if (diffMin < -1) return false;
 
-      // Discard non-operating / tomorrow departures (>120 minutes away)
+      // Horizon Window Cutoff: Discard departures > 120 minutes away (e.g. tomorrow's schedule)
       if (diffMin > 120) return false;
 
       return true;
