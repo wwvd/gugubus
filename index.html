@@ -370,97 +370,65 @@
       return { dir: boundStr, serviceType: first.serviceType || '1' };
     }
 
+    // Anchors strictly on primary operator sequence and attaches secondary stop IDs via nearest GPS match
     function mergeJointStops(kmbStops, ctbStops) {
       if (!kmbStops.length) return ctbStops.map(s => ({ seq: s.seq, name: s.name, ctbStopId: s.stopId }));
       if (!ctbStops.length) return kmbStops.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId }));
 
-      // Reverse CTB stops if physically travelling in opposite direction to KMB
-      const startToStartDist = getGpsDistance(kmbStops[0], ctbStops[0]);
-      const startToEndDist = getGpsDistance(kmbStops[0], ctbStops[ctbStops.length - 1]);
-      if (startToEndDist < startToStartDist) {
-        ctbStops = [...ctbStops].reverse();
+      // Align CTB direction relative to KMB
+      const distStartStart = getGpsDistance(kmbStops[0], ctbStops[0]);
+      const distStartEnd = getGpsDistance(kmbStops[0], ctbStops[ctbStops.length - 1]);
+      let alignedCtb = [...ctbStops];
+      if (distStartEnd < distStartStart) {
+        alignedCtb.reverse();
       }
 
-      const ctbMatchedIndices = new Set();
-      const merged = [];
-      let lastMatchedCtbIdx = -1;
+      const usedCtbIndices = new Set();
 
-      kmbStops.forEach((kStop, kIdx) => {
+      return kmbStops.map((kStop) => {
         const kClean = cleanStopName(kStop.name);
         let bestCtbIdx = -1;
         let minScore = Infinity;
 
-        ctbStops.forEach((cStop, cIdx) => {
-          if (ctbMatchedIndices.has(cIdx)) return;
-          
+        alignedCtb.forEach((cStop, cIdx) => {
+          if (usedCtbIndices.has(cIdx)) return;
+
           const gpsDist = getGpsDistance(kStop, cStop);
           const cClean = cleanStopName(cStop.name);
-          
-          const isNameMatch = kClean && cClean && (
-            kClean === cClean || 
-            (kClean.length >= 2 && cClean.includes(kClean)) || 
-            (cClean.length >= 2 && kClean.includes(cClean))
-          );
+          const isNameMatch = kClean && cClean && (kClean === cClean || kClean.includes(cClean) || cClean.includes(kClean));
 
           let score = gpsDist;
-          if (isNameMatch) score -= 0.002; 
-          if (cIdx < lastMatchedCtbIdx) score += 0.005;
+          if (isNameMatch) score -= 0.005; // Strong preference for name matches
 
-          const isCloseEnough = (gpsDist <= 0.0018) || (isNameMatch && (gpsDist <= 0.004 || gpsDist === Infinity));
-
-          if (isCloseEnough && score < minScore) {
+          if (score < minScore) {
             minScore = score;
             bestCtbIdx = cIdx;
           }
         });
 
         if (bestCtbIdx !== -1) {
-          ctbMatchedIndices.add(bestCtbIdx);
-          lastMatchedCtbIdx = bestCtbIdx;
-          const cStop = ctbStops[bestCtbIdx];
-          
-          let displayName = kStop.name;
-          const kNameClean = cleanStopName(kStop.name);
-          const cNameClean = cleanStopName(cStop.name);
-          
-          if (kNameClean !== cNameClean && kStop.name !== cStop.name) {
-            displayName = `${kStop.name} / ${cStop.name}`;
+          const bestCtb = alignedCtb[bestCtbIdx];
+          const dist = getGpsDistance(kStop, bestCtb);
+          const cClean = cleanStopName(bestCtb.name);
+          const isNameMatch = kClean && cClean && (kClean === cClean || kClean.includes(cClean) || cClean.includes(kClean));
+
+          if (dist <= 0.005 || isNameMatch) {
+            usedCtbIndices.add(bestCtbIdx);
+            return {
+              seq: kStop.seq,
+              name: kStop.name,
+              kmbStopId: kStop.stopId,
+              ctbStopId: bestCtb.stopId
+            };
           }
-
-          merged.push({
-            seq: kStop.seq,
-            name: displayName,
-            kmbStopId: kStop.stopId,
-            ctbStopId: cStop.stopId
-          });
-        } else {
-          merged.push({
-            seq: kStop.seq,
-            name: kStop.name,
-            kmbStopId: kStop.stopId
-          });
         }
-      });
 
-      ctbStops.forEach((cStop, cIdx) => {
-        if (!ctbMatchedIndices.has(cIdx)) {
-          let insertAt = merged.length;
-          for (let i = 0; i < merged.length; i++) {
-            if (merged[i].kmbStopId && cIdx < (i + 1)) {
-              insertAt = i;
-              break;
-            }
-          }
-          merged.splice(insertAt, 0, {
-            seq: cIdx + 0.5,
-            name: cStop.name,
-            ctbStopId: cStop.stopId
-          });
-        }
+        return {
+          seq: kStop.seq,
+          name: kStop.name,
+          kmbStopId: kStop.stopId
+        };
       });
-
-      merged.sort((a, b) => a.seq - b.seq);
-      return merged;
     }
 
     async function loadStopsForCurrentRoute() {
@@ -486,7 +454,7 @@
           }
         }
 
-        // 2. Fetch CTB Stops (evaluating both directions to select correct physical path)
+        // 2. Fetch CTB Stops (checking both directions to lock onto matching path)
         if (route.companies.includes('CTB')) {
           const [resOut, resIn] = await Promise.all([
             fetchWithTimeout(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`),
@@ -518,7 +486,7 @@
           }
         }
 
-        // 3. Merge stops using GPS + Name alignment
+        // 3. Merge stops using master sequence anchoring
         const finalStops = mergeJointStops(kmbStopsDetailed, ctbStopsDetailed);
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
         renderStops(finalStops);
