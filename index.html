@@ -256,7 +256,6 @@
       kmbStopMap.clear();
       ctbStopMap.clear();
 
-      // Safely fetch all 4 providers independently
       const results = await Promise.allSettled([
         fetch(`${KMB_BASE}/route`).then(r => r.json()),
         fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()),
@@ -781,13 +780,13 @@
               .then(r => r.json())
               .then(res => {
                 let buses = [];
-                if (res.busStops && res.busStops.length > 0 && res.busStops[0].bus) {
-                  buses = res.busStops[0].bus;
-                } else if (res.busStop && res.busStop.length > 0 && res.busStop[0].bus) {
-                  buses = res.busStop[0].bus;
-                } else if (res.bus) {
+                if (res.busStops && Array.isArray(res.busStops)) {
+                  res.busStops.forEach(bs => {
+                    if (bs.bus && Array.isArray(bs.bus)) buses.push(...bs.bus);
+                  });
+                } else if (res.bus && Array.isArray(res.bus)) {
                   buses = res.bus;
-                } else if (res.estimatedArrivals) {
+                } else if (res.estimatedArrivals && Array.isArray(res.estimatedArrivals)) {
                   buses = res.estimatedArrivals;
                 }
                 return buses.map(b => ({
@@ -827,7 +826,7 @@
             } else if (typeof item.eta === 'string') {
               let formattedEtaStr = item.eta.trim();
               if (formattedEtaStr.length <= 8 && formattedEtaStr.includes(':')) {
-                const todayStr = now.toISOString().split('T')[0];
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
                 etaDate = new Date(`${todayStr}T${formattedEtaStr}`);
               } else {
                 formattedEtaStr = formattedEtaStr.replace(' ', 'T');
@@ -837,7 +836,7 @@
               etaDate = new Date(item.eta);
             }
 
-            if (isNaN(etaDate.getTime())) return null;
+            if (!etaDate || isNaN(etaDate.getTime())) return null;
 
             let diffMin = Math.round((etaDate - now) / 60000);
             
