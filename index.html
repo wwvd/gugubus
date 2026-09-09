@@ -85,32 +85,6 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
-    // CORS Proxy Fetch Wrapper for NLB and MTR Bus endpoints
-    async function fetchJsonSafe(targetUrl, useProxyForRestricted = false) {
-      if (!useProxyForRestricted) {
-        try {
-          const res = await fetch(targetUrl);
-          if (res.ok) return await res.json();
-        } catch (e) {
-          // Fallback to CORS proxy if direct fetch fails
-        }
-      }
-      
-      try {
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-        const proxyRes = await fetch(proxyUrl);
-        if (proxyRes.ok) return await proxyRes.json();
-      } catch (e) {}
-
-      try {
-        const altProxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-        const altRes = await fetch(altProxyUrl);
-        if (altRes.ok) return await altRes.json();
-      } catch (e) {}
-
-      return null;
-    }
-
     function cleanStopName(name) {
       if (!name) return '';
       return String(name)
@@ -151,7 +125,7 @@
       const cDest2 = cleanStopName(r2.destTc);
 
       return (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
-             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1))) ||
+             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cOrig1))) ||
              (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
              (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cDest2.includes(cOrig1)));
     }
@@ -159,20 +133,24 @@
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        const res = await fetchJsonSafe(`${KMB_BASE}/stop/${stopId}`);
-        if (res && res.data) {
-          const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
-          kmbStopMap.set(stopId, info);
-          return info;
-        }
+        try {
+          const res = await fetch(`${KMB_BASE}/stop/${stopId}`).then(r => r.json());
+          if (res && res.data) {
+            const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+            kmbStopMap.set(stopId, info);
+            return info;
+          }
+        } catch (e) {}
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        const res = await fetchJsonSafe(`${CTB_BASE}/stop/${stopId}`);
-        if (res && res.data) {
-          const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
-          ctbStopMap.set(stopId, info);
-          return info;
-        }
+        try {
+          const res = await fetch(`${CTB_BASE}/stop/${stopId}`).then(r => r.json());
+          if (res && res.data) {
+            const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+            ctbStopMap.set(stopId, info);
+            return info;
+          }
+        } catch (e) {}
       }
       return { name: `巴士站 ${stopId}`, lat: null, long: null };
     }
@@ -185,10 +163,10 @@
       ctbStopMap.clear();
 
       const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
-        fetchJsonSafe(`${KMB_BASE}/route`),
-        fetchJsonSafe(`${CTB_BASE}/route/CTB`),
-        fetchJsonSafe(`${NLB_BASE}/route.php?action=list`, true),
-        fetchJsonSafe(`${MTR_BASE}/getRoute?language=zh`, true)
+        fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({})),
+        fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({})),
+        fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({})),
+        fetch(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json()).catch(() => ({}))
       ]);
 
       const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
@@ -402,6 +380,24 @@
       loadStopsForCurrentRoute();
     }
 
+    function getActiveNlbVariant(route) {
+      const nlbVars = route.variants.filter(v => v.company === 'NLB');
+      if (nlbVars.length === 0) return null;
+      if (nlbVars.length === 1) return nlbVars[0];
+
+      const curOrig = cleanStopName(route.origTc);
+      const curDest = cleanStopName(route.destTc);
+
+      const match = nlbVars.find(v => {
+        const vOrig = cleanStopName(v.origTc);
+        const vDest = cleanStopName(v.destTc);
+        return (vOrig.includes(curOrig) || curOrig.includes(vOrig)) &&
+               (vDest.includes(curDest) || curDest.includes(vDest));
+      });
+
+      return match || nlbVars[0];
+    }
+
     async function loadStopsForCurrentRoute() {
       showLoading(true);
       document.getElementById('stopListView').classList.add('hidden');
@@ -416,7 +412,7 @@
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
           const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
-          const res = await fetchJsonSafe(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`);
+          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json()).catch(() => ({}));
           const rawStops = (res && res.data) || [];
 
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
@@ -427,7 +423,7 @@
 
         if (route.companies.includes('CTB')) {
           const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
-          const res = await fetchJsonSafe(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`);
+          const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json()).catch(() => ({}));
           const rawStops = (res && res.data) || [];
 
           ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
@@ -437,19 +433,9 @@
         }
 
         if (route.companies.includes('NLB')) {
-          const nlbVars = route.variants.filter(v => v.company === 'NLB');
-          const sOrig = cleanStopName(route.origTc);
-          const sDest = cleanStopName(route.destTc);
-
-          let chosenVariant = nlbVars.find(v => {
-            const vOrig = cleanStopName(v.origTc);
-            const vDest = cleanStopName(v.destTc);
-            return (vOrig.includes(sOrig) || sOrig.includes(vOrig)) &&
-                   (vDest.includes(sDest) || sDest.includes(vDest));
-          }) || nlbVars[0];
-
+          const chosenVariant = getActiveNlbVariant(route);
           if (chosenVariant && chosenVariant.nlbRouteId) {
-            const res = await fetchJsonSafe(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`, true);
+            const res = await fetch(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({}));
             const rawStops = (res && (res.stops || res.data)) || [];
             nlbStopsDetailed = rawStops.map((s, idx) => ({
               stopId: String(s.stopId || s.stop_id || ''),
@@ -462,11 +448,11 @@
 
         if (route.companies.includes('MTRB')) {
           const mtrUrl = `${MTR_BASE}/getRouteStops?routeName=${encodeURIComponent(route.route)}&language=zh`;
-          const res = await fetchJsonSafe(mtrUrl, true);
+          const res = await fetch(mtrUrl).then(r => r.json()).catch(() => ({}));
 
-          const rawStops = (res && (res.busStops || res.stops)) || [];
+          const rawStops = (res && (res.busStops || res.stops || res.busStop)) || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
-            stopId: String(s.busStopId || s.stopId || ''),
+            stopId: String(s.busStopId || s.stopId || s.id || ''),
             seq: parseInt(s.sequence, 10) || idx + 1,
             name: s.busStopNameTC || s.busStopNameEN || `車站 ${idx+1}`
           }));
@@ -518,6 +504,27 @@
       });
     }
 
+    function parseEtaToDate(item, now) {
+      if (typeof item.arrivalTimeInSecond === 'number') {
+        return new Date(now.getTime() + item.arrivalTimeInSecond * 1000);
+      }
+      if (!item.eta) return null;
+
+      let str = String(item.eta).trim();
+      if (!str) return null;
+
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) {
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        return new Date(`${yyyy}-${mm}-${dd}T${str}`);
+      }
+
+      str = str.replace(' ', 'T');
+      const d = new Date(str);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
     async function fetchETA(stop, activeCard, isAutoRefresh = false) {
       currentSelectedStop = stop;
       currentActiveCard = activeCard;
@@ -543,34 +550,41 @@
         if (stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           fetchPromises.push(
-            fetchJsonSafe(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
+            fetch(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
+              .then(r => r.json())
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: item.co || 'KMB' })))
+              .catch(() => [])
           );
         }
 
         if (stop.ctbStopId) {
           fetchPromises.push(
-            fetchJsonSafe(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
+            fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
+              .then(r => r.json())
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
+              .catch(() => [])
           );
         }
 
         if (stop.nlbStopId && stop.nlbRouteId) {
           fetchPromises.push(
-            fetchJsonSafe(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}&language=zh`, true)
+            fetch(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${encodeURIComponent(stop.nlbRouteId)}&stopId=${encodeURIComponent(stop.nlbStopId)}&language=zh`)
+              .then(r => r.json())
               .then(res => ((res && (res.estimatedArrivals || res.data)) || []).map(item => ({
                 eta: item.estimatedArrivalAt || item.estimatedArrival,
                 co: 'NLB',
                 defaultCo: 'NLB',
                 rmk_tc: item.departed ? '已開出' : (item.noService ? '不提供服務' : '')
               })))
+              .catch(() => [])
           );
         }
 
         if (stop.mtrStopId) {
           const mtrEtaUrl = `${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`;
           fetchPromises.push(
-            fetchJsonSafe(mtrEtaUrl, true)
+            fetch(mtrEtaUrl)
+              .then(r => r.json())
               .then(res => {
                 let buses = [];
                 if (res && res.busStops && Array.isArray(res.busStops)) {
@@ -588,6 +602,7 @@
                   rmk_tc: b.remarks || b.remark || b.arrivalTimeText || ''
                 }));
               })
+              .catch(() => [])
           );
         }
 
@@ -598,24 +613,8 @@
         const formattedEtas = rawEtas
           .filter(item => item && (item.eta || item.arrivalTimeInSecond !== undefined))
           .map(item => {
-            let etaDate;
-            
-            if (typeof item.arrivalTimeInSecond === 'number') {
-              etaDate = new Date(now.getTime() + item.arrivalTimeInSecond * 1000);
-            } else if (typeof item.eta === 'string') {
-              let formattedEtaStr = item.eta.trim();
-              if (formattedEtaStr.length <= 8 && formattedEtaStr.includes(':')) {
-                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-                etaDate = new Date(`${todayStr}T${formattedEtaStr}`);
-              } else {
-                formattedEtaStr = formattedEtaStr.replace(' ', 'T');
-                etaDate = new Date(formattedEtaStr);
-              }
-            } else {
-              etaDate = new Date(item.eta);
-            }
-
-            if (!etaDate || isNaN(etaDate.getTime())) return null;
+            const etaDate = parseEtaToDate(item, now);
+            if (!etaDate) return null;
 
             let diffMin = Math.round((etaDate - now) / 60000);
             if (diffMin < 0) {
