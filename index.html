@@ -61,7 +61,7 @@
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
-      <p class="mt-3 text-stone-600 font-medium">即時載入菇菇巴士最新數據中...</p>
+      <p class="mt-3 text-stone-600 font-medium">從政府 Open API 實時載入最新路線數據中...</p>
     </div>
 
     <!-- Route List View -->
@@ -292,34 +292,13 @@
             route: r.routeNo ? r.routeNo.trim() : '',
             bound: 'outbound',
             serviceType: '1',
-            origTc: r.origNameTC || nameParts[0]?.trim() || '梅窩/東涌',
-            destTc: r.destNameTC || nameParts[1]?.trim() || '昂坪/機場',
+            origTc: r.origNameTC || nameParts[0]?.trim() || '起點',
+            destTc: r.destNameTC || nameParts[1]?.trim() || '終點',
             nlbRouteId: r.routeId
           };
         });
 
-        let rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
-        if (!rawMtr || rawMtr.length === 0) {
-          rawMtr = [
-            { routeName: 'K51', routeDescription: '富泰 ⇄ 掃管笏' },
-            { routeName: 'K51A', routeDescription: '富泰 ⇄ 掃管笏(循環線)' },
-            { routeName: 'K52', routeDescription: '屯門站 ⇄ 龍鼓灘' },
-            { routeName: 'K52A', routeDescription: '屯門站 ⇄ 曾嘴' },
-            { routeName: 'K53', routeDescription: '屯門站 ⇄ 掃管笏(循環線)' },
-            { routeName: 'K54', routeDescription: '和田邨 ⇄ 屯門市中心' },
-            { routeName: 'K58', routeDescription: '富泰 ⇄ 青山灣' },
-            { routeName: 'K65', routeDescription: '元朗東 ⇄ 流浮山' },
-            { routeName: 'K66', routeDescription: '朗屏 ⇄ 大棠' },
-            { routeName: 'K68', routeDescription: '元朗工業邨 ⇄ 華翠園' },
-            { routeName: 'K73', routeDescription: '天恆 ⇄ 元朗西' },
-            { routeName: 'K74', routeDescription: '天水圍市中心 ⇄ 凹頭' },
-            { routeName: 'K75A', routeDescription: '天水圍站 ⇄ 洪水橋' },
-            { routeName: 'K75P', routeDescription: '天瑞 ⇄ 洪水橋' },
-            { routeName: 'K76', routeDescription: '天恆 ⇄ 天水圍站' },
-            { routeName: '506', routeDescription: '屯門碼頭 ⇄ 兆麟' }
-          ];
-        }
-
+        const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
         const mtrRoutes = rawMtr.map(r => {
           const name = r.routeName || r.route || '';
           const desc = r.routeDescription || r.description || '';
@@ -329,8 +308,8 @@
             route: name.trim(),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parts[0]?.trim() || '屯門/元朗',
-            destTc: parts[1]?.trim() || '港鐵站'
+            origTc: parts[0]?.trim() || '起點',
+            destTc: parts[1]?.trim() || '終點'
           };
         });
 
@@ -374,7 +353,7 @@
         allRoutes.sort((a, b) => a.route.localeCompare(b.route, undefined, { numeric: true, sensitivity: 'base' }));
         renderRoutes(allRoutes);
       } catch (err) {
-        alert("無法讀取巴士路線資料。");
+        alert("無法讀取即時巴士路線資料，請檢查網路連線。");
       } finally {
         showLoading(false);
       }
@@ -587,7 +566,6 @@
           const nlbVars = route.variants.filter(v => v.company === 'NLB');
           let chosenVariant = nlbVars[0];
 
-          // Dynamic direction switching for NLB route IDs
           if (nlbVars.length > 1) {
             chosenVariant = nlbVars.find(v => {
               const cleanDest = cleanStopName(v.destTc);
@@ -788,7 +766,6 @@
         }
 
         if (stop.mtrStopId) {
-          // Correct parameter key: busStopId (NOT stopId)
           fetchPromises.push(
             fetchFresh(`${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`)
               .then(r => r.json())
@@ -826,7 +803,6 @@
           .map(item => {
             let etaDate;
             
-            // Prefer relative offset if provided by MTR API
             if (typeof item.arrivalTimeInSecond === 'number') {
               etaDate = new Date(now.getTime() + item.arrivalTimeInSecond * 1000);
             } else if (typeof item.eta === 'string') {
@@ -835,7 +811,6 @@
                 const todayStr = now.toISOString().split('T')[0];
                 etaDate = new Date(`${todayStr}T${formattedEtaStr}`);
               } else {
-                // Safari ISO sanitization
                 formattedEtaStr = formattedEtaStr.replace(' ', 'T');
                 etaDate = new Date(formattedEtaStr);
               }
