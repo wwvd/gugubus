@@ -85,6 +85,32 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
+    // CORS Proxy Fetch Wrapper for NLB and MTR Bus endpoints
+    async function fetchJsonSafe(targetUrl, useProxyForRestricted = false) {
+      if (!useProxyForRestricted) {
+        try {
+          const res = await fetch(targetUrl);
+          if (res.ok) return await res.json();
+        } catch (e) {
+          // Fallback to CORS proxy if direct fetch fails
+        }
+      }
+      
+      try {
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+        const proxyRes = await fetch(proxyUrl);
+        if (proxyRes.ok) return await proxyRes.json();
+      } catch (e) {}
+
+      try {
+        const altProxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        const altRes = await fetch(altProxyUrl);
+        if (altRes.ok) return await altRes.json();
+      } catch (e) {}
+
+      return null;
+    }
+
     function cleanStopName(name) {
       if (!name) return '';
       return String(name)
@@ -107,69 +133,6 @@
         }
       }
       return { orig: clean, dest: clean };
-    }
-
-    function filterCalendarAwareStops(stops, routeNum) {
-      const now = new Date();
-      const day = now.getDay();
-      const hours = now.getHours();
-      const mins = now.getMinutes();
-      const currentTotalMins = hours * 60 + mins;
-
-      const isSunday = (day === 0);
-      const isSaturday = (day === 6);
-      const isWeekday = (day >= 1 && day <= 5);
-      const isMorning = (hours >= 6 && hours < 11);
-      const isEvening = (hours >= 16 && hours < 21);
-
-      const checkName = (s, substring) => {
-        const kName = s.kmbName || s.name || '';
-        const cName = s.ctbName || s.name || '';
-        return kName.includes(substring) || cName.includes(substring);
-      };
-
-      const hasStatueSquare = stops.some(s => checkName(s, '皇后像廣場'));
-      const hasAlexandraOrChaterGarden = stops.some(s => checkName(s, '歷山大廈') || checkName(s, '遮打花園'));
-
-      return stops.filter(s => {
-        const kName = s.kmbName || s.name || '';
-        const cName = s.ctbName || s.name || '';
-        const fullName = `${kName} ${cName}`;
-
-        if (hasStatueSquare && hasAlexandraOrChaterGarden) {
-          if (!isSunday) {
-            if (fullName.includes('歷山大廈') || fullName.includes('遮打花園')) return false;
-          } else {
-            if (fullName.includes('皇后像廣場')) return false;
-          }
-        }
-
-        if (!isSunday) {
-          if (fullName.includes('只限星期日及公眾假期') || fullName.includes('星期日及公眾假期特別') || fullName.includes('星期日及假期') || fullName.includes('假日特別班')) return false;
-        } else {
-          if (fullName.includes('星期日及公眾假期除外') || fullName.includes('星期日除外') || fullName.includes('公眾假期除外')) return false;
-        }
-
-        if (!isWeekday) {
-          if (fullName.includes('只限星期一至五') || fullName.includes('星期一至五適用') || fullName.includes('平日特別') || fullName.includes('平日早晨') || fullName.includes('平日上午') || fullName.includes('平日下午')) return false;
-        } else {
-          if (fullName.includes('只限星期六及日') || fullName.includes('只限星期六、日') || fullName.includes('星期一至五除外')) return false;
-        }
-
-        if (!isSaturday && fullName.includes('只限星期六') && !fullName.includes('星期六及')) return false;
-        if (!isMorning && (fullName.includes('只限上午') || fullName.includes('早晨特別') || fullName.includes('上午班次') || fullName.includes('早晨時段') || fullName.includes('上午特別班') || fullName.includes('早晨班次'))) return false;
-        if (!isEvening && (fullName.includes('只限下午') || fullName.includes('傍晚特別') || fullName.includes('下午班次') || fullName.includes('下午時段') || fullName.includes('下午特別班') || fullName.includes('黃昏特別'))) return false;
-
-        const timeRangeRegex = /(\d{1,2}):(\d{2})\s*[-–~至]\s*(\d{1,2}):(\d{2})/;
-        const match = fullName.match(timeRangeRegex);
-        if (match) {
-          const startTotal = parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
-          const endTotal = parseInt(match[3], 10) * 60 + parseInt(match[4], 10);
-          if (currentTotalMins < startTotal || currentTotalMins > endTotal) return false;
-        }
-
-        return true;
-      });
     }
 
     function isJointRouteNumber(routeNum) {
@@ -196,57 +159,22 @@
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        try {
-          const res = await fetch(`${KMB_BASE}/stop/${stopId}`).then(r => r.json());
-          if (res.data) {
-            const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
-            kmbStopMap.set(stopId, info);
-            return info;
-          }
-        } catch (e) {}
+        const res = await fetchJsonSafe(`${KMB_BASE}/stop/${stopId}`);
+        if (res && res.data) {
+          const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+          kmbStopMap.set(stopId, info);
+          return info;
+        }
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        try {
-          const res = await fetch(`${CTB_BASE}/stop/${stopId}`).then(r => r.json());
-          if (res.data) {
-            const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
-            ctbStopMap.set(stopId, info);
-            return info;
-          }
-        } catch (e) {}
+        const res = await fetchJsonSafe(`${CTB_BASE}/stop/${stopId}`);
+        if (res && res.data) {
+          const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+          ctbStopMap.set(stopId, info);
+          return info;
+        }
       }
       return { name: `巴士站 ${stopId}`, lat: null, long: null };
-    }
-
-    function findBestCtbMatch(kStop, ctbStops) {
-      if (!ctbStops || ctbStops.length === 0) return null;
-
-      let bestMatch = null;
-      let minDistance = Infinity;
-
-      if (kStop.lat && kStop.long) {
-        ctbStops.forEach(cStop => {
-          if (cStop.lat && cStop.long) {
-            const distSq = Math.pow(kStop.lat - cStop.lat, 2) + Math.pow(kStop.long - cStop.long, 2);
-            if (distSq < 0.00001 && distSq < minDistance) {
-              minDistance = distSq;
-              bestMatch = cStop;
-            }
-          }
-        });
-      }
-
-      if (bestMatch) return bestMatch;
-
-      const kNorm = cleanStopName(kStop.name);
-      if (kNorm.length >= 2) {
-        bestMatch = ctbStops.find(cStop => {
-          const cNorm = cleanStopName(cStop.name);
-          return cNorm.includes(kNorm) || kNorm.includes(cNorm);
-        });
-      }
-
-      return bestMatch || null;
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -256,19 +184,14 @@
       kmbStopMap.clear();
       ctbStopMap.clear();
 
-      const results = await Promise.allSettled([
-        fetch(`${KMB_BASE}/route`).then(r => r.json()),
-        fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()),
-        fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()),
-        fetch(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json())
+      const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
+        fetchJsonSafe(`${KMB_BASE}/route`),
+        fetchJsonSafe(`${CTB_BASE}/route/CTB`),
+        fetchJsonSafe(`${NLB_BASE}/route.php?action=list`, true),
+        fetchJsonSafe(`${MTR_BASE}/getRoute?language=zh`, true)
       ]);
 
-      const kmbRes = results[0].status === 'fulfilled' ? results[0].value : {};
-      const ctbRes = results[1].status === 'fulfilled' ? results[1].value : {};
-      const nlbRes = results[2].status === 'fulfilled' ? results[2].value : {};
-      const mtrRes = results[3].status === 'fulfilled' ? results[3].value : {};
-
-      const kmbRoutes = (kmbRes.data || []).map(r => {
+      const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
         const isLwb = (r.route && (r.route.startsWith('A') || r.route.startsWith('E') || r.route.startsWith('N') || r.route.startsWith('R') || r.route.startsWith('S'))) && !['101','102','112'].includes(r.route);
         return {
           company: isLwb ? 'LWB' : 'KMB',
@@ -280,7 +203,7 @@
         };
       });
 
-      const ctbRoutes = (ctbRes.data || []).map(r => ({
+      const ctbRoutes = ((ctbRes && ctbRes.data) || []).map(r => ({
         company: 'CTB',
         route: r.route ? r.route.trim() : '',
         bound: r.bound || 'outbound',
@@ -289,7 +212,7 @@
         destTc: r.dest_tc
       }));
 
-      const rawNlb = nlbRes.routes || nlbRes.data || [];
+      const rawNlb = (nlbRes && (nlbRes.routes || nlbRes.data)) || [];
       const nlbRoutes = rawNlb.map(r => {
         const title = r.routeNameC || r.routeNameS || r.routeNameE || '';
         const parsed = parseEndpoints(title);
@@ -304,7 +227,7 @@
         };
       });
 
-      const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
+      const rawMtr = (mtrRes && (mtrRes.busRoutes || mtrRes.routes || mtrRes.bus)) || [];
       const mtrRoutes = rawMtr.map(r => {
         const name = String(r.routeName || r.route || '').trim();
         const desc = r.routeNameZh || r.routeDescription || r.description || '';
@@ -479,62 +402,12 @@
       loadStopsForCurrentRoute();
     }
 
-    async function fetchCtbStopDetails(rawStops) {
-      return await Promise.all(rawStops.map(async (s) => {
-        const info = await getStopDetail('CTB', s.stop);
-        return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
-      }));
-    }
-
-    async function getMatchingCtbStops(routeNumber, kmbStops) {
-      if (!kmbStops || kmbStops.length === 0) return [];
-      
-      try {
-        const [outRes, inRes] = await Promise.all([
-          fetch(`${CTB_BASE}/route-stop/CTB/${routeNumber}/outbound`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route-stop/CTB/${routeNumber}/inbound`).then(r => r.json()).catch(() => ({ data: [] }))
-        ]);
-
-        const outStops = outRes.data || [];
-        const inStops = inRes.data || [];
-
-        if (outStops.length === 0 && inStops.length === 0) return [];
-        if (outStops.length === 0) return await fetchCtbStopDetails(inStops);
-        if (inStops.length === 0) return await fetchCtbStopDetails(outStops);
-
-        const kmbFirst = kmbStops[0];
-        const [outFirstDetail, inFirstDetail] = await Promise.all([
-          getStopDetail('CTB', outStops[0].stop),
-          getStopDetail('CTB', inStops[0].stop)
-        ]);
-
-        let outDist = Infinity;
-        let inDist = Infinity;
-
-        if (kmbFirst.lat && kmbFirst.long) {
-          if (outFirstDetail.lat && outFirstDetail.long) {
-            outDist = Math.hypot(kmbFirst.lat - outFirstDetail.lat, kmbFirst.long - outFirstDetail.long);
-          }
-          if (inFirstDetail.lat && inFirstDetail.long) {
-            inDist = Math.hypot(kmbFirst.lat - inFirstDetail.lat, kmbFirst.long - inFirstDetail.long);
-          }
-        }
-
-        const chosenRawStops = (outDist < inDist) ? outStops : inStops;
-        return await fetchCtbStopDetails(chosenRawStops);
-      } catch (e) {
-        return [];
-      }
-    }
-
     async function loadStopsForCurrentRoute() {
       showLoading(true);
       document.getElementById('stopListView').classList.add('hidden');
 
       try {
         const route = currentSelectedRoute;
-        const isJoint = route.companies.includes('KMB') && route.companies.includes('CTB');
-
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
         let nlbStopsDetailed = [];
@@ -542,26 +415,25 @@
 
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
-          const isOutbound = route.dir === 'outbound';
-          const dir = isOutbound ? 'outbound' : 'inbound';
-          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json()).catch(() => ({}));
-          const rawStops = res.data || [];
+          const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
+          const res = await fetchJsonSafe(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`);
+          const rawStops = (res && res.data) || [];
 
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             const info = await getStopDetail('KMB', s.stop);
-            return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
+            return { stopId: s.stop, seq: s.seq, name: info.name };
           }));
         }
 
         if (route.companies.includes('CTB')) {
-          if (isJoint && kmbStopsDetailed.length > 0) {
-            ctbStopsDetailed = await getMatchingCtbStops(route.route, kmbStopsDetailed);
-          } else {
-            const isOutbound = route.dir === 'outbound';
-            const dir = isOutbound ? 'outbound' : 'inbound';
-            const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json()).catch(() => ({}));
-            ctbStopsDetailed = await fetchCtbStopDetails(res.data || []);
-          }
+          const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
+          const res = await fetchJsonSafe(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`);
+          const rawStops = (res && res.data) || [];
+
+          ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
+            const info = await getStopDetail('CTB', s.stop);
+            return { stopId: s.stop, seq: s.seq, name: info.name };
+          }));
         }
 
         if (route.companies.includes('NLB')) {
@@ -577,33 +449,26 @@
           }) || nlbVars[0];
 
           if (chosenVariant && chosenVariant.nlbRouteId) {
-            const res = await fetch(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
-            const rawStops = res.stops || res.data || [];
-            nlbStopsDetailed = rawStops.map((s, idx) => {
-              const stopName = s.stopNameC || s.stopNameS || s.stopNameE || `車站 ${idx+1}`;
-              return {
-                stopId: String(s.stopId || ''),
-                seq: idx + 1,
-                name: stopName,
-                lat: parseFloat(s.latitude || 0),
-                long: parseFloat(s.longitude || 0),
-                nlbRouteId: chosenVariant.nlbRouteId
-              };
-            });
+            const res = await fetchJsonSafe(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`, true);
+            const rawStops = (res && (res.stops || res.data)) || [];
+            nlbStopsDetailed = rawStops.map((s, idx) => ({
+              stopId: String(s.stopId || s.stop_id || ''),
+              seq: idx + 1,
+              name: s.stopNameC || s.stopNameS || s.stopNameE || `車站 ${idx+1}`,
+              nlbRouteId: chosenVariant.nlbRouteId
+            }));
           }
         }
 
         if (route.companies.includes('MTRB')) {
           const mtrUrl = `${MTR_BASE}/getRouteStops?routeName=${encodeURIComponent(route.route)}&language=zh`;
-          const res = await fetch(mtrUrl).then(r => r.json()).catch(() => ({}));
+          const res = await fetchJsonSafe(mtrUrl, true);
 
-          const rawStops = res.busStops || res.stops || [];
+          const rawStops = (res && (res.busStops || res.stops)) || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
             stopId: String(s.busStopId || s.stopId || ''),
             seq: parseInt(s.sequence, 10) || idx + 1,
-            name: s.busStopNameTC || s.busStopNameEN || `車站 ${idx+1}`,
-            lat: parseFloat(s.latitude || 0),
-            long: parseFloat(s.longitude || 0)
+            name: s.busStopNameTC || s.busStopNameEN || `車站 ${idx+1}`
           }));
 
           if (route.dir === 'inbound' && mtrStopsDetailed.length > 0) {
@@ -612,22 +477,10 @@
         }
 
         let finalStops = [];
-        if (isJoint && kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map((kStop) => {
-            const matchedCtb = findBestCtbMatch(kStop, ctbStopsDetailed);
-            return {
-              seq: kStop.seq,
-              name: kStop.name,
-              kmbName: kStop.name,
-              ctbName: matchedCtb ? matchedCtb.name : null,
-              kmbStopId: kStop.stopId,
-              ctbStopId: matchedCtb ? matchedCtb.stopId : null
-            };
-          });
-        } else if (kmbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbName: s.name, ctbName: null, kmbStopId: s.stopId }));
+        if (kmbStopsDetailed.length > 0) {
+          finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId }));
         } else if (ctbStopsDetailed.length > 0) {
-          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbName: null, ctbName: s.name, ctbStopId: s.stopId }));
+          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, ctbStopId: s.stopId }));
         } else if (nlbStopsDetailed.length > 0) {
           finalStops = nlbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, nlbStopId: s.stopId, nlbRouteId: s.nlbRouteId }));
         } else if (mtrStopsDetailed.length > 0) {
@@ -635,11 +488,7 @@
         }
 
         finalStops.sort((a, b) => a.seq - b.seq);
-        finalStops = filterCalendarAwareStops(finalStops, route.route);
-
-        finalStops.forEach((s, idx) => {
-          s.displaySeq = idx + 1;
-        });
+        finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
 
         renderStops(finalStops);
       } catch (err) {
@@ -659,47 +508,11 @@
         card.className = "bg-white p-3.5 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 transition cursor-pointer flex items-center space-x-3";
         card.onclick = () => fetchETA(s, card, false);
 
-        let stopNameHtml = '';
-        if (s.kmbName && s.ctbName) {
-          if (s.kmbName === s.ctbName) {
-            stopNameHtml = `<div class="text-md font-medium text-stone-800">${s.kmbName}</div>`;
-          } else {
-            stopNameHtml = `
-              <div class="flex flex-col text-sm font-medium space-y-1">
-                <div class="flex items-center space-x-1.5 text-stone-800">
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white flex-shrink-0">九巴</span>
-                  <span>${s.kmbName}</span>
-                </div>
-                <div class="flex items-center space-x-1.5 text-stone-700">
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-400 text-amber-950 flex-shrink-0">城巴</span>
-                  <span>${s.ctbName}</span>
-                </div>
-              </div>
-            `;
-          }
-        } else if (s.kmbName) {
-          stopNameHtml = `
-            <div class="flex items-center space-x-1.5 text-md font-medium text-stone-800">
-              ${currentSelectedRoute.companies.length > 1 ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white flex-shrink-0">九巴</span>' : ''}
-              <span>${s.kmbName}</span>
-            </div>
-          `;
-        } else if (s.ctbName) {
-          stopNameHtml = `
-            <div class="flex items-center space-x-1.5 text-md font-medium text-stone-800">
-              ${currentSelectedRoute.companies.length > 1 ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-400 text-amber-950 flex-shrink-0">城巴</span>' : ''}
-              <span>${s.ctbName}</span>
-            </div>
-          `;
-        } else {
-          stopNameHtml = `<div class="text-md font-medium text-stone-800">${s.name}</div>`;
-        }
-
         card.innerHTML = `
           <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
             ${s.displaySeq || s.seq}
           </div>
-          ${stopNameHtml}
+          <div class="text-md font-medium text-stone-800">${s.name}</div>
         `;
         container.appendChild(card);
       });
@@ -717,20 +530,7 @@
       }
 
       const seqNum = stop.displaySeq || stop.seq;
-      let displayName = stop.name;
-      if (stop.kmbName && stop.ctbName) {
-        if (stop.kmbName === stop.ctbName) {
-          displayName = stop.kmbName;
-        } else {
-          displayName = `九巴: ${stop.kmbName} | 城巴: ${stop.ctbName}`;
-        }
-      } else if (stop.kmbName) {
-        displayName = stop.kmbName;
-      } else if (stop.ctbName) {
-        displayName = stop.ctbName;
-      }
-
-      document.getElementById('selectedStopInfo').textContent = `已選車站：${seqNum}. ${displayName}`;
+      document.getElementById('selectedStopInfo').textContent = `已選車站：${seqNum}. ${stop.name}`;
       const etaContainer = document.getElementById('etaContainer');
 
       if (!isAutoRefresh) {
@@ -743,51 +543,42 @@
         if (stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           fetchPromises.push(
-            fetch(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
-              .then(r => r.json())
-              .then(res => (res.data || []).map(item => ({ ...item, defaultCo: item.co || 'KMB' })))
-              .catch(() => [])
+            fetchJsonSafe(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
+              .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: item.co || 'KMB' })))
           );
         }
 
         if (stop.ctbStopId) {
           fetchPromises.push(
-            fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
-              .then(r => r.json())
-              .then(res => (res.data || []).map(item => ({ ...item, defaultCo: 'CTB' })))
-              .catch(() => [])
+            fetchJsonSafe(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
+              .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
           );
         }
 
         if (stop.nlbStopId && stop.nlbRouteId) {
           fetchPromises.push(
-            fetch(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}&language=zh`)
-              .then(r => r.json())
-              .then(res => (res.estimatedArrivals || res.data || []).map(item => ({
+            fetchJsonSafe(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}&language=zh`, true)
+              .then(res => ((res && (res.estimatedArrivals || res.data)) || []).map(item => ({
                 eta: item.estimatedArrivalAt || item.estimatedArrival,
                 co: 'NLB',
                 defaultCo: 'NLB',
                 rmk_tc: item.departed ? '已開出' : (item.noService ? '不提供服務' : '')
               })))
-              .catch(() => [])
           );
         }
 
         if (stop.mtrStopId) {
           const mtrEtaUrl = `${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`;
           fetchPromises.push(
-            fetch(mtrEtaUrl)
-              .then(r => r.json())
+            fetchJsonSafe(mtrEtaUrl, true)
               .then(res => {
                 let buses = [];
-                if (res.busStops && Array.isArray(res.busStops)) {
+                if (res && res.busStops && Array.isArray(res.busStops)) {
                   res.busStops.forEach(bs => {
                     if (bs.bus && Array.isArray(bs.bus)) buses.push(...bs.bus);
                   });
-                } else if (res.bus && Array.isArray(res.bus)) {
+                } else if (res && res.bus && Array.isArray(res.bus)) {
                   buses = res.bus;
-                } else if (res.estimatedArrivals && Array.isArray(res.estimatedArrivals)) {
-                  buses = res.estimatedArrivals;
                 }
                 return buses.map(b => ({
                   eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
@@ -797,7 +588,6 @@
                   rmk_tc: b.remarks || b.remark || b.arrivalTimeText || ''
                 }));
               })
-              .catch(() => [])
           );
         }
 
@@ -806,18 +596,7 @@
         const now = new Date();
 
         const formattedEtas = rawEtas
-          .filter(item => {
-            if (!item || (!item.eta && item.arrivalTimeInSecond === undefined)) return false;
-
-            if (item.dest_tc) {
-              const destClean = cleanStopName(item.dest_tc);
-              const origClean = cleanStopName(currentSelectedRoute.origTc);
-              if (destClean && origClean && destClean === origClean && destClean !== cleanStopName(currentSelectedRoute.destTc)) {
-                return false;
-              }
-            }
-            return true;
-          })
+          .filter(item => item && (item.eta || item.arrivalTimeInSecond !== undefined))
           .map(item => {
             let etaDate;
             
@@ -839,25 +618,20 @@
             if (!etaDate || isNaN(etaDate.getTime())) return null;
 
             let diffMin = Math.round((etaDate - now) / 60000);
-            
             if (diffMin < 0) {
-              if (seqNum === 1 || diffMin >= -3) {
-                diffMin = 0;
-              } else {
-                return null;
-              }
+              if (seqNum === 1 || diffMin >= -3) diffMin = 0;
+              else return null;
             }
 
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
             const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
-            const rmk = item.rmk_tc || item.rmk_en || '';
 
             return {
               company: co,
               mins: diffMin,
               exactTime: `${hh}:${mm}`,
-              rmk: rmk,
+              rmk: item.rmk_tc || item.rmk_en || '',
               rawTime: etaDate.getTime()
             };
           })
@@ -885,29 +659,14 @@
             const badge = document.createElement('div');
             badge.className = "bg-[#7a4831] text-amber-50 text-sm font-semibold px-3 py-1.5 rounded-xl shadow-sm flex items-center space-x-2 border border-[#633824]";
             
-            let durationLabel = '';
-            if (seqNum === 1) {
-              durationLabel = item.mins === 0 ? '即將開出' : `${item.mins} 分鐘`;
-            } else {
-              durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
-            }
-
+            let durationLabel = item.mins === 0 ? (seqNum === 1 ? '即將開出' : '即將到站') : `${item.mins} 分鐘`;
             let coBg = 'bg-amber-400 text-amber-950';
             let coName = '城巴';
 
-            if (item.company === 'KMB') {
-              coBg = 'bg-red-700 text-white';
-              coName = '九巴';
-            } else if (item.company === 'LWB') {
-              coBg = 'bg-teal-700 text-white';
-              coName = '龍運';
-            } else if (item.company === 'NLB') {
-              coBg = 'bg-cyan-700 text-white';
-              coName = '嶼巴';
-            } else if (item.company === 'MTRB') {
-              coBg = 'bg-indigo-700 text-white';
-              coName = '港鐵';
-            }
+            if (item.company === 'KMB') { coBg = 'bg-red-700 text-white'; coName = '九巴'; }
+            else if (item.company === 'LWB') { coBg = 'bg-teal-700 text-white'; coName = '龍運'; }
+            else if (item.company === 'NLB') { coBg = 'bg-cyan-700 text-white'; coName = '嶼巴'; }
+            else if (item.company === 'MTRB') { coBg = 'bg-indigo-700 text-white'; coName = '港鐵'; }
 
             const companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
             const rmkTag = item.rmk ? `<span class="text-xs bg-amber-200/20 px-1.5 py-0.5 rounded text-amber-200 font-normal">${item.rmk}</span>` : '';
@@ -923,9 +682,7 @@
           });
         }
 
-        if (!isAutoRefresh) {
-          startAutoRefresh();
-        }
+        if (!isAutoRefresh) startAutoRefresh();
 
       } catch (err) {
         if (!isAutoRefresh) {
