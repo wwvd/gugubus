@@ -85,25 +85,50 @@
         .trim();
     }
 
-    // Filter Sunday / Public Holiday pedestrian zone diversion stops for routes like CTB 1, 5B, 10
-    function filterHolidayDiversionStops(stops, routeNum) {
-      const day = new Date().getDay();
-      const isSunday = (day === 0); // 0 = Sunday
+    // Generalized Calendar-Aware Stop Filter for ALL bus routes
+    function filterCalendarAwareStops(stops, routeNum) {
+      const now = new Date();
+      const day = now.getDay();
+      const isSunday = (day === 0);
 
-      if (['1', '5B', '10'].includes(routeNum.trim().toUpperCase())) {
-        return stops.filter(s => {
-          const name = s.name || '';
+      // Detect if the route passes through Central Chater Road vs Des Voeux Road Central
+      const hasStatueSquare = stops.some(s => (s.name || '').includes('皇后像廣場'));
+      const hasAlexandraOrChaterGarden = stops.some(s => (s.name || '').includes('歷山大廈') || (s.name || '').includes('遮打花園'));
+
+      return stops.filter(s => {
+        const name = s.name || '';
+
+        // 1. Central / Chater Road Pedestrian Zone Diversions (Sunday / Public Holiday)
+        if (hasStatueSquare && hasAlexandraOrChaterGarden) {
           if (!isSunday) {
-            // Mon-Sat: Filter out Sunday/Holiday diversion stops on Des Voeux Road Central
+            // Mon-Sat: Filter out Sunday/Holiday diversion stops
             if (name.includes('歷山大廈') || name.includes('遮打花園')) return false;
           } else {
             // Sunday: Filter out weekday Chater Road stops
             if (name.includes('皇后像廣場') || (name.includes('遮打道') && !name.includes('德輔道中'))) return false;
           }
-          return true;
-        });
-      }
-      return stops;
+        }
+
+        // 2. Generic Schedule Keywords embedded in Stop Names across any HK route
+        if (!isSunday) {
+          // On Mon-Sat, filter out Sunday/Holiday-only stops
+          if (name.includes('只限星期日及公眾假期') || 
+              name.includes('星期日及公眾假期特別') || 
+              name.includes('星期日及假期') ||
+              name.includes('假日特別班')) {
+            return false;
+          }
+        } else {
+          // On Sunday/Holidays, filter out Mon-Sat only stops
+          if (name.includes('星期日及公眾假期除外') || 
+              name.includes('只限星期一至六') || 
+              name.includes('星期一至六適用')) {
+            return false;
+          }
+        }
+
+        return true;
+      });
     }
 
     // Identifies whether a route number belongs to a Cross-Harbour Joint Route (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, etc.)
@@ -468,8 +493,8 @@
         // Sort chronologically by sequence
         finalStops.sort((a, b) => a.seq - b.seq);
 
-        // Apply Day-of-Week Pedestrian Zone / Holiday Diversion Filter
-        finalStops = filterHolidayDiversionStops(finalStops, route.route);
+        // Apply Universal Calendar-Aware Stop Filtering (Applies to ALL bus routes)
+        finalStops = filterCalendarAwareStops(finalStops, route.route);
 
         // Re-number sequence numbers to maintain clean 1..N order
         finalStops.forEach((s, idx) => {
