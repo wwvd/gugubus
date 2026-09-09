@@ -106,6 +106,15 @@
         .trim();
     }
 
+    function splitRouteDescription(desc) {
+      if (!desc) return { orig: '起點', dest: '終點' };
+      const parts = desc.split(/[\>|–|—|\-|\⇄|至|往]/).map(p => p.trim()).filter(Boolean);
+      return {
+        orig: parts[0] || '起點',
+        dest: parts[1] || parts[0] || '終點'
+      };
+    }
+
     function filterCalendarAwareStops(stops, routeNum) {
       const now = new Date();
       const day = now.getDay();
@@ -285,31 +294,32 @@
           destTc: r.dest_tc
         }));
 
-        const nlbRoutes = (nlbRes.routes || []).map(r => {
-          const nameParts = (r.routeNameTC || '').split('>');
+        const rawNlb = nlbRes.routes || nlbRes.data || [];
+        const nlbRoutes = rawNlb.map(r => {
+          const parsed = splitRouteDescription(r.routeNameTC || r.routeName || '');
           return {
             company: 'NLB',
             route: r.routeNo ? r.routeNo.trim() : '',
             bound: 'outbound',
             serviceType: '1',
-            origTc: r.origNameTC || nameParts[0]?.trim() || '起點',
-            destTc: r.destNameTC || nameParts[1]?.trim() || '終點',
-            nlbRouteId: r.routeId
+            origTc: parsed.orig,
+            destTc: parsed.dest,
+            nlbRouteId: String(r.routeId)
           };
         });
 
-        const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
+        const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || mtrRes.data || [];
         const mtrRoutes = rawMtr.map(r => {
           const name = r.routeName || r.route || '';
           const desc = r.routeDescription || r.description || '';
-          const parts = desc.split(/[\⇄\-\>]/);
+          const parsed = splitRouteDescription(desc);
           return {
             company: 'MTRB',
             route: name.trim(),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parts[0]?.trim() || '起點',
-            destTc: parts[1]?.trim() || '終點'
+            origTc: parsed.orig,
+            destTc: parsed.dest
           };
         });
 
@@ -567,19 +577,24 @@
           let chosenVariant = nlbVars[0];
 
           if (nlbVars.length > 1) {
+            const isOutbound = route.dir === 'outbound';
             chosenVariant = nlbVars.find(v => {
-              const cleanDest = cleanStopName(v.destTc);
-              const cleanCurrentDest = cleanStopName(route.destTc);
-              return cleanDest.includes(cleanCurrentDest) || cleanCurrentDest.includes(cleanDest);
-            }) || nlbVars[0];
+              const cVOrig = cleanStopName(v.origTc);
+              const cVDest = cleanStopName(v.destTc);
+              const cROrig = cleanStopName(route.origTc);
+              const cRDest = cleanStopName(route.destTc);
+              return (cVOrig.includes(cROrig) || cROrig.includes(cVOrig)) &&
+                     (cVDest.includes(cRDest) || cRDest.includes(cVDest));
+            }) || (isOutbound ? nlbVars[0] : nlbVars[1]);
           }
 
           if (chosenVariant && chosenVariant.nlbRouteId) {
             const res = await fetchFresh(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
-            nlbStopsDetailed = (res.stops || []).map((s, idx) => {
+            const rawStops = res.stops || res.data || [];
+            nlbStopsDetailed = rawStops.map((s, idx) => {
               const stopName = s.stopName_tc || s.stopName_c || s.stopNameTC || s.stopName_en || s.stopNameEN || s.stopName || `車站 ${idx+1}`;
               return {
-                stopId: s.stopId,
+                stopId: String(s.stopId),
                 seq: idx + 1,
                 name: stopName,
                 lat: parseFloat(s.latitude || 0),
@@ -593,14 +608,18 @@
         if (route.companies.includes('MTRB')) {
           const res = await fetchFresh(`${MTR_BASE}/getRouteStops?routeName=${encodeURIComponent(route.route)}&language=zh`).then(r => r.json()).catch(() => ({ busStops: [] }));
 
-          const rawStops = res.busStops || res.stops || res.busStop || [];
+          const rawStops = res.busStops || res.stops || res.busStop || res.data || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
-            stopId: s.busStopId || s.stopId,
-            seq: s.sequence || idx + 1,
-            name: s.busStopNameTC || s.stopName || s.busStopName || `車站 ${idx+1}`,
+            stopId: String(s.busStopId || s.stopId || s.id),
+            seq: parseInt(s.sequence, 10) || idx + 1,
+            name: s.busStopNameTC || s.busStopName || s.stopNameTC || s.stopName || `車站 ${idx+1}`,
             lat: parseFloat(s.latitude || 0),
             long: parseFloat(s.longitude || 0)
           }));
+
+          if (route.dir === 'inbound' && mtrStopsDetailed.length > 0) {
+            mtrStopsDetailed.reverse();
+          }
         }
 
         let finalStops = [];
@@ -755,8 +774,8 @@
           fetchPromises.push(
             fetchFresh(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}`)
               .then(r => r.json())
-              .then(res => (res.estimatedArrivals || []).map(item => ({
-                eta: item.estimatedArrivalAt,
+              .then(res => (res.estimatedArrivals || res.data || []).map(item => ({
+                eta: item.estimatedArrivalAt || item.estimatedArrival,
                 co: 'NLB',
                 defaultCo: 'NLB',
                 rmk_tc: item.departed ? '已開出' : (item.noService ? '不提供服務' : '')
@@ -773,7 +792,7 @@
                 const buses = res.bus || res.busStops?.[0]?.bus || res.busStop?.[0]?.bus || res.estimatedArrivals || [];
                 return buses.map(b => ({
                   eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
-                  arrivalTimeInSecond: b.arrivalTimeInSecond,
+                  arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : undefined,
                   co: 'MTRB',
                   defaultCo: 'MTRB',
                   rmk_tc: b.remarks || b.remark || b.arrivalTimeText || ''
