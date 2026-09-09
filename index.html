@@ -95,17 +95,35 @@
     }
 
     function parseEndpoints(str) {
-      if (!str) return { orig: '起點', dest: '終點' };
-      const clean = str.replace(/（.*?）|\(.*?\)|【.*?】/g, '').trim();
-      const delimiters = ['>', '⇄', '至', '往', '–', '—', '-'];
+      if (!str) return { orig: '', dest: '' };
+      const clean = String(str).replace(/（.*?）|\(.*?\)|【.*?】/g, '').trim();
+      const delimiters = [' > ', '>', ' ⇄ ', '⇄', ' 至 ', '至', ' 往 ', '往', ' – ', '–', ' — ', '—', ' - ', '-'];
       for (const d of delimiters) {
         if (clean.includes(d)) {
           const parts = clean.split(d).map(p => p.trim()).filter(Boolean);
-          if (parts.length >= 2) return { orig: parts[0], dest: parts[1] };
-          if (parts.length === 1) return { orig: parts[0], dest: parts[0] };
+          if (parts.length >= 2) {
+            return { orig: parts[0], dest: parts[parts.length - 1] };
+          }
         }
       }
-      return { orig: clean || '起點', dest: clean || '終點' };
+      return { orig: clean, dest: clean };
+    }
+
+    function matchNlbVariant(nlbVars, selectedOrig, selectedDest) {
+      if (!nlbVars || nlbVars.length === 0) return null;
+      if (nlbVars.length === 1) return nlbVars[0];
+
+      const sOrig = cleanStopName(selectedOrig);
+      const sDest = cleanStopName(selectedDest);
+
+      const matched = nlbVars.find(v => {
+        const vOrig = cleanStopName(v.origTc);
+        const vDest = cleanStopName(v.destTc);
+        return (vOrig.includes(sOrig) || sOrig.includes(vOrig)) &&
+               (vDest.includes(sDest) || sDest.includes(vDest));
+      });
+
+      return matched || nlbVars[0];
     }
 
     function filterCalendarAwareStops(stops, routeNum) {
@@ -296,24 +314,24 @@
             route: String(r.routeNo || '').trim(),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig,
-            destTc: parsed.dest,
+            origTc: parsed.orig || '嶼巴起點',
+            destTc: parsed.dest || '嶼巴終點',
             nlbRouteId: String(r.routeId || '')
           };
         });
 
-        const rawMtr = mtrRes.busRoutes || mtrRes.routes || [];
+        const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
         const mtrRoutes = rawMtr.map(r => {
-          const name = String(r.routeName || '').trim();
-          const desc = r.routeDescription || '';
+          const name = String(r.routeName || r.route || '').trim();
+          const desc = r.routeNameZh || r.routeDescription || r.description || '';
           const parsed = parseEndpoints(desc);
           return {
             company: 'MTRB',
             route: name,
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig,
-            destTc: parsed.dest
+            origTc: parsed.orig || name,
+            destTc: parsed.dest || name
           };
         });
 
@@ -568,11 +586,7 @@
 
         if (route.companies.includes('NLB')) {
           const nlbVars = route.variants.filter(v => v.company === 'NLB');
-          let chosenVariant = nlbVars[0];
-
-          if (nlbVars.length > 1) {
-            chosenVariant = (route.dir === 'inbound' && nlbVars[1]) ? nlbVars[1] : nlbVars[0];
-          }
+          const chosenVariant = matchNlbVariant(nlbVars, route.origTc, route.destTc);
 
           if (chosenVariant && chosenVariant.nlbRouteId) {
             const res = await fetch(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
@@ -784,6 +798,8 @@
                   buses = res.busStop[0].bus;
                 } else if (res.bus) {
                   buses = res.bus;
+                } else if (res.estimatedArrivals) {
+                  buses = res.estimatedArrivals;
                 }
                 return buses.map(b => ({
                   eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
