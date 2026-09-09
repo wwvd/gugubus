@@ -640,7 +640,7 @@
       if (exactMatch) {
         return { 
           dir: (exactMatch.bound === 'O' || exactMatch.bound === 'outbound') ? 'outbound' : 'inbound', 
-          serviceType: exactMatch.serviceType || '1' 
+          serviceType: '1' 
         };
       }
 
@@ -649,39 +649,14 @@
         const vOrig = cleanStopName(v.origTc);
         if (vOrig && cOrig && (vOrig.includes(cOrig) || cOrig.includes(vOrig))) {
           const boundStr = (v.bound === 'O' || v.bound === 'outbound') ? 'outbound' : 'inbound';
-          return { dir: boundStr, serviceType: v.serviceType || '1' };
+          return { dir: boundStr, serviceType: '1' };
         }
       }
 
-      const first = coVariants[0];
-      return { dir: targetDir, serviceType: first.serviceType || '1' };
+      return { dir: targetDir, serviceType: '1' };
     }
 
-    async function getActiveKmbServiceTypes(routeNum, dir, variants) {
-      const kmbVars = variants.filter(v => v.company === 'KMB' || v.company === 'LWB');
-      if (kmbVars.length === 0) return ['1'];
-
-      const serviceTypes = Array.from(new Set(kmbVars.map(v => String(v.serviceType || '1'))));
-      if (serviceTypes.length === 1 && serviceTypes[0] === '1') {
-        return ['1'];
-      }
-
-      const activeTypes = [];
-      const checkPromises = serviceTypes.map(async (st) => {
-        const res = await fetchWithRetry(`${KMB_BASE}/route-eta/${routeNum}/${st}`, {}, 5000, 2);
-        if (res && Array.isArray(res.data) && res.data.length > 0) {
-          const hasActiveEta = res.data.some(item => isValidRealtimeEta(item, (dir === 'outbound' ? 'O' : 'I')));
-          if (hasActiveEta) {
-            activeTypes.push(st);
-          }
-        }
-      });
-
-      await Promise.all(checkPromises);
-      return activeTypes.length > 0 ? activeTypes : ['1'];
-    }
-
-    async function getActiveCtbStops(routeNum, rawOut, rawIn, kmbRefStartStop, targetDir) {
+    async function getActiveCtbStops(routeNum, rawOut, rawIn, targetDir) {
       const ctbOutDetailed = rawOut.map(s => {
         const info = ctbStopMap.get(s.stop) || {};
         return { 
@@ -706,27 +681,27 @@
         };
       });
 
-      if (!ctbOutDetailed.length && !ctbInDetailed.length) return [];
-
-      let activeDirStops = (targetDir === 'inbound') 
-        ? (ctbInDetailed.length ? ctbInDetailed : ctbOutDetailed) 
-        : (ctbOutDetailed.length ? ctbOutDetailed : ctbInDetailed);
-
-      if (kmbRefStartStop && ctbOutDetailed.length > 0 && ctbInDetailed.length > 0) {
-        const distOut = getGpsDistance(kmbRefStartStop, ctbOutDetailed[0]);
-        const distIn = getGpsDistance(kmbRefStartStop, ctbInDetailed[0]);
-        if (distIn < distOut && targetDir === 'inbound') {
-          activeDirStops = ctbInDetailed;
-        } else if (distOut < distIn && targetDir === 'outbound') {
-          activeDirStops = ctbOutDetailed;
-        }
+      if (targetDir === 'inbound') {
+        return ctbInDetailed.length ? ctbInDetailed : ctbOutDetailed;
+      } else {
+        return ctbOutDetailed.length ? ctbOutDetailed : ctbInDetailed;
       }
-
-      return activeDirStops;
     }
 
     function matchJointStops(kmbStops, ctbStops) {
-      if (!kmbStops || !kmbStops.length) return [];
+      if (!kmbStops || !kmbStops.length) {
+        if (ctbStops && ctbStops.length) {
+          return ctbStops.map(s => ({
+            seq: s.seq,
+            name_tc: s.name_tc,
+            name_en: s.name_en,
+            ctbStopId: s.stopId,
+            lat: s.lat,
+            long: s.long
+          }));
+        }
+        return [];
+      }
       if (!ctbStops || !ctbStops.length) {
         return kmbStops.map(s => ({ 
           seq: s.seq, 
@@ -738,27 +713,9 @@
         }));
       }
 
-      const kStartClean = cleanStopName(kmbStops[0].name_tc);
-      const cStartClean = cleanStopName(ctbStops[0].name_tc);
-      const cEndClean = cleanStopName(ctbStops[ctbStops.length - 1].name_tc);
-
-      let alignedCtb = [...ctbStops];
-      const startMatchScore = stringSimilarity(kStartClean, cStartClean);
-      const endMatchScore = stringSimilarity(kStartClean, cEndClean);
-
-      if (endMatchScore > startMatchScore && endMatchScore > 0.3) {
-        alignedCtb.reverse();
-      } else {
-        const dStartStart = getGpsDistance(kmbStops[0], ctbStops[0]);
-        const dStartEnd = getGpsDistance(kmbStops[0], ctbStops[ctbStops.length - 1]);
-        if (dStartEnd < dStartStart && dStartEnd < 0.01) {
-          alignedCtb.reverse();
-        }
-      }
-
       const usedCtbIndices = new Set();
       const numK = kmbStops.length;
-      const numC = alignedCtb.length;
+      const numC = ctbStops.length;
 
       return kmbStops.map((kStop, kIdx) => {
         const kClean = cleanStopName(kStop.name_tc);
@@ -767,7 +724,7 @@
 
         const expectedCIdx = Math.round((kIdx / (numK - 1 || 1)) * (numC - 1));
 
-        alignedCtb.forEach((cStop, cIdx) => {
+        ctbStops.forEach((cStop, cIdx) => {
           if (usedCtbIndices.has(cIdx)) return;
           if (Math.abs(cIdx - expectedCIdx) > 6) return;
 
@@ -788,11 +745,11 @@
           return {
             seq: kStop.seq,
             name_tc: kStop.name_tc,
-            name_en: kStop.name_en || alignedCtb[bestCtbIdx].name_en,
+            name_en: kStop.name_en || ctbStops[bestCtbIdx].name_en,
             kmbStopId: kStop.stopId,
-            ctbStopId: alignedCtb[bestCtbIdx].stopId,
-            lat: kStop.lat || alignedCtb[bestCtbIdx].lat,
-            long: kStop.long || alignedCtb[bestCtbIdx].long
+            ctbStopId: ctbStops[bestCtbIdx].stopId,
+            lat: kStop.lat || ctbStops[bestCtbIdx].lat,
+            long: kStop.long || ctbStops[bestCtbIdx].long
           };
         }
 
@@ -807,7 +764,7 @@
       });
     }
 
-    // Universal Real-time Operating ETA Validator for ALL HK Bus Routes
+    // Universal Real-time Operating ETA Validator for displaying arrival times
     function isValidRealtimeEta(item, targetBoundChar, now = new Date()) {
       if (!item) return false;
 
@@ -853,53 +810,10 @@
       // Strict Cutoff: Discard past departures (more than 1 minute ago)
       if (diffMin < -1) return false;
 
-      // Horizon Window Cutoff: Discard departures > 120 minutes away (e.g. tomorrow's schedule)
+      // Horizon Window Cutoff: Discard departures > 120 minutes away
       if (diffMin > 120) return false;
 
       return true;
-    }
-
-    async function validateActiveStopsViaEta(routeNum, stops, companies) {
-      if (!stops || stops.length === 0) return stops;
-
-      const isCtb = companies.includes('CTB');
-      const isKmb = companies.includes('KMB') || companies.includes('LWB');
-      const targetBoundChar = (currentSelectedRoute.dir === 'outbound') ? 'O' : 'I';
-      const now = new Date();
-
-      const etaCheckResults = await Promise.all(stops.map(async (stop) => {
-        let hasEta = false;
-
-        if (isCtb && stop.ctbStopId) {
-          const res = await fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${routeNum}`, {}, 4000, 1);
-          if (res && Array.isArray(res.data)) {
-            hasEta = res.data.some(item => isValidRealtimeEta(item, targetBoundChar, now));
-          }
-        }
-
-        if (!hasEta && isKmb && stop.kmbStopId) {
-          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
-          const res = await fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${routeNum}/${kmbVar.serviceType}`, {}, 4000, 1);
-          if (res && Array.isArray(res.data)) {
-            hasEta = res.data.some(item => isValidRealtimeEta(item, targetBoundChar, now));
-          }
-        }
-
-        return { stopId: stop.kmbStopId || stop.ctbStopId, hasEta };
-      }));
-
-      const totalActiveEtas = etaCheckResults.filter(r => r.hasEta).length;
-
-      if (totalActiveEtas >= 2) {
-        return stops.filter((stop, idx) => {
-          const isStartOrEnd = (idx === 0 || idx === stops.length - 1);
-          const activeInfo = etaCheckResults[idx];
-          if (isStartOrEnd) return true;
-          return activeInfo && activeInfo.hasEta;
-        });
-      }
-
-      return stops;
     }
 
     async function loadStopsForCurrentRoute() {
@@ -913,36 +827,24 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
+        // 1. Fetch KMB / LWB Master Stop Sequence for target direction
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
           if (kmbConfig) {
-            const activeServiceTypes = await getActiveKmbServiceTypes(route.route, kmbConfig.dir, route.variants);
-            
-            const stopListPromises = activeServiceTypes.map(st => 
-              fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${st}`, {}, 8000, 2)
-            );
-            const stopListResults = await Promise.all(stopListPromises);
+            const res = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/1`, {}, 8000, 2);
+            const rawStops = (res && res.data) || [];
 
-            const rawStopsMap = new Map();
-            stopListResults.forEach(res => {
-              const rawStops = (res && res.data) || [];
-              rawStops.forEach(s => {
-                if (!rawStopsMap.has(s.stop)) {
-                  rawStopsMap.set(s.stop, s);
-                }
-              });
-            });
+            const sortedRawStops = [...rawStops].sort((a, b) => a.seq - b.seq);
 
-            const combinedRawStops = Array.from(rawStopsMap.values()).sort((a, b) => a.seq - b.seq);
-
-            kmbStopsDetailed = await Promise.all(combinedRawStops.map(async (s) => {
+            kmbStopsDetailed = await Promise.all(sortedRawStops.map(async (s) => {
               const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
               return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
             }));
           }
         }
 
+        // 2. Query Citybus API for CTB Route Stops for target direction
         if (route.companies.includes('CTB')) {
           const [resOut, resIn] = await Promise.all([
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
@@ -957,9 +859,10 @@
             getCtbStopsConcurrently(rawIn.map(s => s.stop))
           ]);
 
-          ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, kmbStopsDetailed[0], route.dir);
+          ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, route.dir);
         }
 
+        // 3. Anchor / merge stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
@@ -967,8 +870,8 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
+        // 4. Apply Pedestrian Zone Filtering
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
-        finalStops = await validateActiveStopsViaEta(route.route, finalStops, route.companies);
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
         currentRenderedStops = finalStops;
@@ -1054,10 +957,9 @@
         const targetBoundChar = (currentSelectedRoute.dir === 'outbound') ? 'O' : 'I';
 
         if (stop.kmbStopId) {
-          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
           fetchPromises.push(
-            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`, {}, 6000, 2)
+            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/1`, {}, 6000, 2)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
           );
         }
