@@ -33,7 +33,11 @@
           <span>⇄</span>
         </button>
       </div>
-      <div id="selectedRouteDir" class="text-sm text-stone-600 mb-3"></div>
+      <div id="selectedRouteDir" class="text-sm text-stone-600 mb-2"></div>
+      
+      <!-- Variant / Special Service Type Selector -->
+      <div id="variantSelectContainer" class="mb-3 hidden"></div>
+
       <div id="selectedStopInfo" class="text-md font-semibold text-stone-800 border-t border-amber-200/60 pt-2">請選擇下方車站</div>
       <div id="etaContainer" class="mt-3 flex flex-wrap gap-2"></div>
     </div>
@@ -58,6 +62,12 @@
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
       <p class="mt-3 text-stone-600 font-medium" id="loadingText">實時載入最新路線數據中...</p>
       <button id="retryBtn" onclick="fetchAllRoutes()" class="hidden mt-4 bg-amber-800 text-amber-100 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-900 transition">重新載入</button>
+    </div>
+
+    <!-- Special Route Alert Banner -->
+    <div id="specialRouteNotice" class="hidden mb-3 p-3 bg-amber-100/80 border border-amber-300 rounded-xl text-xs text-amber-900 font-medium flex items-center space-x-2">
+      <span>⏰</span>
+      <span>此班次為特定時間 / 特別班次路線 (服務時間請參考巴士公司最新公佈)。</span>
     </div>
 
     <!-- Route List View -->
@@ -265,7 +275,7 @@
             company: lwbCheck ? 'LWB' : 'KMB',
             route: r.route ? String(r.route).trim() : '',
             bound: r.bound,
-            serviceType: r.service_type || '1',
+            serviceType: String(r.service_type || '1'),
             origTc: r.orig_tc,
             destTc: r.dest_tc
           };
@@ -382,7 +392,7 @@
         companies: mergedRoute.companies,
         primaryCompany: primaryCompany,
         bound: primaryVariant.bound,
-        serviceType: primaryVariant.serviceType || '1',
+        serviceType: String(primaryVariant.serviceType || '1'),
         origTc: primaryVariant.origTc,
         destTc: primaryVariant.destTc,
         variants: mergedRoute.variants,
@@ -413,6 +423,48 @@
       document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
       document.getElementById('selectedStopInfo').textContent = "請選擇下方車站查看到站時間";
       document.getElementById('etaContainer').innerHTML = "";
+
+      renderVariantSelector();
+    }
+
+    function renderVariantSelector() {
+      const container = document.getElementById('variantSelectContainer');
+      container.innerHTML = '';
+
+      if (!currentSelectedRoute) return;
+
+      // Find KMB/LWB variants for current orientation
+      const coVariants = currentSelectedRoute.variants.filter(v => v.company === 'KMB' || v.company === 'LWB');
+      
+      if (coVariants.length > 1) {
+        let html = `<div class="text-xs text-stone-500 font-semibold mb-1">班次類別 / 特別路線：</div><div class="flex flex-wrap gap-1.5">`;
+        
+        coVariants.forEach(v => {
+          const isSelected = String(v.serviceType) === String(currentSelectedRoute.serviceType);
+          const label = (v.serviceType === '1') 
+            ? '常規班次' 
+            : `特別班次 (${v.origTc || ''} ➔ ${v.destTc || ''})`;
+          
+          const btnClass = isSelected
+            ? "px-2.5 py-1 rounded-lg text-xs font-bold bg-[#7a4831] text-amber-50 shadow-sm border border-[#633824]"
+            : "px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100/70 text-stone-700 hover:bg-amber-200/80 border border-amber-200 transition";
+
+          html += `<button onclick="selectServiceType('${v.serviceType}')" class="${btnClass}">${label}</button>`;
+        });
+
+        html += `</div>`;
+        container.innerHTML = html;
+        container.classList.remove('hidden');
+      } else {
+        container.classList.add('hidden');
+      }
+    }
+
+    function selectServiceType(st) {
+      if (!currentSelectedRoute) return;
+      currentSelectedRoute.serviceType = String(st);
+      renderVariantSelector();
+      loadStopsForCurrentRoute();
     }
 
     function toggleDirection() {
@@ -425,6 +477,8 @@
       document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
       document.getElementById('selectedStopInfo').textContent = "請選擇下方車站";
       document.getElementById('etaContainer').innerHTML = "";
+      
+      renderVariantSelector();
       loadStopsForCurrentRoute();
     }
 
@@ -529,6 +583,13 @@
       showLoading(true);
       document.getElementById('stopListView').classList.add('hidden');
 
+      const specialNotice = document.getElementById('specialRouteNotice');
+      if (currentSelectedRoute.serviceType !== '1') {
+        specialNotice.classList.remove('hidden');
+      } else {
+        specialNotice.classList.add('hidden');
+      }
+
       try {
         const route = currentSelectedRoute;
         let kmbStopsDetailed = [];
@@ -539,7 +600,8 @@
           const kmbConfig = getCompanyDir('KMB', route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.origTc, route.destTc, route.variants);
           if (kmbConfig) {
-            const res = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${kmbConfig.serviceType}`, {}, 8000, 2);
+            const activeServiceType = route.serviceType || kmbConfig.serviceType || '1';
+            const res = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${activeServiceType}`, {}, 8000, 2);
             const rawStops = (res && res.data) || [];
             kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
               const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
@@ -680,10 +742,10 @@
         const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
 
         if (stop.kmbStopId) {
-          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
+          const serviceType = currentSelectedRoute.serviceType || '1';
           const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
           fetchPromises.push(
-            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`, {}, 6000, 2)
+            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${serviceType}`, {}, 6000, 2)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
           );
         }
@@ -802,6 +864,7 @@
       document.getElementById('stopListView').classList.add('hidden');
       document.getElementById('infoCard').classList.add('hidden');
       document.getElementById('backBtn').classList.add('hidden');
+      document.getElementById('specialRouteNotice').classList.add('hidden');
       document.getElementById('appTitle').innerHTML = `<span>🍄</span><span>Gugubus 菇專用香港巴士實時到站查詢</span>`;
     }
 
