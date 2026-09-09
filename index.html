@@ -72,7 +72,7 @@
     let currentActiveCard = null;
     let autoRefreshTimer = null;
 
-    // In-memory stop caches for instant stop name resolution
+    // Stop caches for instant stop name resolution
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
@@ -90,7 +90,6 @@
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       
       const routeNum = r1.route.toUpperCase();
-      // Hong Kong Cross-Harbour Joint Route Numbering Pattern (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, etc.)
       const isCrossHarbourPattern = /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N9\d\d|X\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(routeNum);
       
       const cOrig1 = cleanStopName(r1.origTc);
@@ -167,35 +166,11 @@
     async function fetchAllRoutes() {
       showLoading(true);
       try {
-        // Proactively fetch routes AND bulk stop dictionaries in parallel
-        const [kmbRes, ctbRes, kmbStopsRes, ctbStopsRes] = await Promise.all([
+        // Fetch route metadata instantly without heavy blocking downloads
+        const [kmbRes, ctbRes] = await Promise.all([
           fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${KMB_BASE}/stop`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/stop/CTB`).then(r => r.json()).catch(() => fetch(`${CTB_BASE}/stop`).then(r => r.json()).catch(() => ({ data: [] })))
+          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] }))
         ]);
-
-        // Pre-populate KMB stops cache
-        if (kmbStopsRes.data && Array.isArray(kmbStopsRes.data)) {
-          kmbStopsRes.data.forEach(s => {
-            kmbStopMap.set(s.stop, {
-              name: s.name_tc || s.name_en,
-              lat: parseFloat(s.lat),
-              long: parseFloat(s.long)
-            });
-          });
-        }
-
-        // Pre-populate Citybus stops cache
-        if (ctbStopsRes.data && Array.isArray(ctbStopsRes.data)) {
-          ctbStopsRes.data.forEach(s => {
-            ctbStopMap.set(s.stop, {
-              name: s.name_tc || s.name_en,
-              lat: parseFloat(s.lat),
-              long: parseFloat(s.long)
-            });
-          });
-        }
 
         const kmbRoutes = (kmbRes.data || []).map(r => ({
           company: 'KMB',
@@ -593,7 +568,7 @@
         // Sort chronologically
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
         
-        // Always display the top 3 ETAs
+        // Always display top 3 ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
@@ -630,7 +605,7 @@
           });
         }
 
-        // Reset and set 30-second auto-refresh timer
+        // Set 5-second auto-refresh timer
         if (!isAutoRefresh) {
           startAutoRefresh();
         }
@@ -648,7 +623,7 @@
         if (currentSelectedStop) {
           fetchETA(currentSelectedStop, currentActiveCard, true);
         }
-      }, 30000);
+      }, 5000); // 5-second auto refresh
     }
 
     function stopAutoRefresh() {
