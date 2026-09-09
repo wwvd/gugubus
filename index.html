@@ -43,7 +43,7 @@
 
     <!-- Search Section (Route View Only) -->
     <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4">
-      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 101, 102, 112, 960)..." 
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 101, 102, 112, 960, A21, 38X)..." 
         class="w-full px-4 py-2 border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-700 focus:border-amber-700 bg-amber-50/20 placeholder-stone-400">
     </div>
 
@@ -51,7 +51,7 @@
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
-      <p class="mt-3 text-stone-600 font-medium">載入菇菇巴士數據中...</p>
+      <p class="mt-3 text-stone-600 font-medium">載入菇菇巴士數據中 (九巴 / 城巴 / 龍運 / 嶼巴)...</p>
     </div>
 
     <!-- Route List View -->
@@ -65,6 +65,7 @@
   <script>
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
+    const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
 
     let allRoutes = [];
     let currentSelectedRoute = null;
@@ -85,7 +86,7 @@
         .trim();
     }
 
-    // Generalized Calendar-Aware Stop Filter for ALL bus routes
+    // Universal Calendar-Aware Stop Filter for ALL bus routes
     function filterCalendarAwareStops(stops, routeNum) {
       const now = new Date();
       const day = now.getDay();
@@ -131,20 +132,16 @@
       });
     }
 
-    // Identifies whether a route number belongs to a Cross-Harbour Joint Route (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, etc.)
     function isJointRouteNumber(routeNum) {
       const norm = routeNum.trim().toUpperCase();
       return /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d|X1\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(norm);
     }
 
-    // Consolidation grouping logic: groups outbound/inbound and joint operators into ONE single route entry per line
     function isSameRouteGroup(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
 
-      // Same company + same route number -> always group into 1 entry (Outbound & Inbound merged into 1 card)
       if (r1.company === r2.company) return true;
 
-      // Different companies + same route number -> group ONLY if genuine cross-harbour joint route
       if (!isJointRouteNumber(r1.route)) return false;
 
       const cOrig1 = cleanStopName(r1.origTc);
@@ -152,17 +149,14 @@
       const cOrig2 = cleanStopName(r2.origTc);
       const cDest2 = cleanStopName(r2.destTc);
 
-      const directOrReverseMatch = 
-        (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
-        (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1))) ||
-        (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
-        (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cOrig2.includes(cDest1)));
-
-      return directOrReverseMatch;
+      return (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
+             (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1))) ||
+             (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
+             (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cOrig2.includes(cDest1)));
     }
 
     async function getStopDetail(company, stopId) {
-      if (company === 'KMB') {
+      if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
         try {
           const res = await fetch(`${KMB_BASE}/stop/${stopId}`).then(r => r.json());
@@ -172,7 +166,7 @@
             return info;
           }
         } catch (e) {}
-      } else {
+      } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
         try {
           const res = await fetch(`${CTB_BASE}/stop/${stopId}`).then(r => r.json());
@@ -224,19 +218,23 @@
     async function fetchAllRoutes() {
       showLoading(true);
       try {
-        const [kmbRes, ctbRes] = await Promise.all([
+        const [kmbRes, ctbRes, nlbRes] = await Promise.all([
           fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] }))
+          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] }))
         ]);
 
-        const kmbRoutes = (kmbRes.data || []).map(r => ({
-          company: 'KMB',
-          route: r.route ? r.route.trim() : '',
-          bound: r.bound,
-          serviceType: r.service_type || '1',
-          origTc: r.orig_tc,
-          destTc: r.dest_tc
-        }));
+        const kmbRoutes = (kmbRes.data || []).map(r => {
+          const isLwb = (r.route && (r.route.startsWith('A') || r.route.startsWith('E') || r.route.startsWith('N') || r.route.startsWith('R') || r.route.startsWith('S'))) && !['101','102','112'].includes(r.route);
+          return {
+            company: isLwb ? 'LWB' : 'KMB',
+            route: r.route ? r.route.trim() : '',
+            bound: r.bound,
+            serviceType: r.service_type || '1',
+            origTc: r.orig_tc,
+            destTc: r.dest_tc
+          };
+        });
 
         const ctbRoutes = (ctbRes.data || []).map(r => ({
           company: 'CTB',
@@ -247,7 +245,17 @@
           destTc: r.dest_tc
         }));
 
-        const combined = [...kmbRoutes, ...ctbRoutes];
+        const nlbRoutes = (nlbRes.routes || []).map(r => ({
+          company: 'NLB',
+          route: r.routeNo ? r.routeNo.trim() : '',
+          bound: 'outbound',
+          serviceType: '1',
+          origTc: r.origNameTC || r.routeNameTC?.split('>')?.[0] || '大嶼山',
+          destTc: r.destNameTC || r.routeNameTC?.split('>')?.[1] || '東涌',
+          nlbRouteId: r.routeId
+        }));
+
+        const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes];
         const routeGroups = [];
 
         combined.forEach(r => {
@@ -311,11 +319,16 @@
         if (r.companies.includes('KMB')) {
           badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white mr-1 shadow-sm">九巴</span>`;
         }
+        if (r.companies.includes('LWB')) {
+          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white mr-1 shadow-sm">龍運</span>`;
+        }
         if (r.companies.includes('CTB')) {
           badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950 mr-1 shadow-sm">城巴</span>`;
         }
+        if (r.companies.includes('NLB')) {
+          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-cyan-700 text-white mr-1 shadow-sm">嶼巴</span>`;
+        }
 
-        // Single entry per route indicating bi-direction (⇄)
         card.innerHTML = `
           <div class="flex items-center space-x-3">
             <div class="flex items-center">${badgesHtml}</div>
@@ -335,7 +348,7 @@
 
     async function selectRoute(mergedRoute) {
       stopAutoRefresh();
-      const primaryCompany = mergedRoute.companies.includes('KMB') ? 'KMB' : mergedRoute.companies[0];
+      const primaryCompany = mergedRoute.companies[0];
       const primaryVariant = mergedRoute.variants.find(v => v.company === primaryCompany) || mergedRoute.variants[0];
 
       currentSelectedRoute = {
@@ -347,7 +360,7 @@
         origTc: primaryVariant.origTc,
         destTc: primaryVariant.destTc,
         variants: mergedRoute.variants,
-        dir: (primaryVariant.bound === 'O' || primaryVariant.bound.toLowerCase() === 'outbound') ? 'outbound' : 'inbound'
+        dir: (primaryVariant.bound === 'O' || primaryVariant.bound?.toLowerCase() === 'outbound') ? 'outbound' : 'inbound'
       };
 
       document.getElementById('routeListView').classList.add('hidden');
@@ -368,8 +381,14 @@
       if (currentSelectedRoute.companies.includes('KMB')) {
         companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white">九巴</span>`;
       }
+      if (currentSelectedRoute.companies.includes('LWB')) {
+        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white">龍運</span>`;
+      }
       if (currentSelectedRoute.companies.includes('CTB')) {
         companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950">城巴</span>`;
+      }
+      if (currentSelectedRoute.companies.includes('NLB')) {
+        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-cyan-700 text-white">嶼巴</span>`;
       }
 
       headerEl.innerHTML = `
@@ -456,9 +475,10 @@
 
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
+        let nlbStopsDetailed = [];
 
-        if (route.companies.includes('KMB')) {
-          const kmbVar = route.variants.find(v => v.company === 'KMB') || {};
+        if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
+          const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
           const isOutbound = route.dir === 'outbound';
           const dir = isOutbound ? 'outbound' : 'inbound';
           const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json());
@@ -478,6 +498,21 @@
             const dir = isOutbound ? 'outbound' : 'inbound';
             const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
             ctbStopsDetailed = await fetchCtbStopDetails(res.data || []);
+          }
+        }
+
+        if (route.companies.includes('NLB')) {
+          const nlbVar = route.variants.find(v => v.company === 'NLB');
+          if (nlbVar && nlbVar.nlbRouteId) {
+            const res = await fetch(`${NLB_BASE}/stop.php?action=getStop&routeId=${nlbVar.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
+            nlbStopsDetailed = (res.stops || []).map((s, idx) => ({
+              stopId: s.stopId,
+              seq: idx + 1,
+              name: s.stopNameTC || s.stopNameEN,
+              lat: parseFloat(s.latitude),
+              long: parseFloat(s.longitude),
+              nlbRouteId: nlbVar.nlbRouteId
+            }));
           }
         }
 
@@ -503,7 +538,7 @@
             kmbStopId: s.stopId,
             ctbStopId: null
           }));
-        } else {
+        } else if (ctbStopsDetailed.length > 0) {
           finalStops = ctbStopsDetailed.map(s => ({
             seq: s.seq,
             name: s.name,
@@ -512,15 +547,20 @@
             kmbStopId: null,
             ctbStopId: s.stopId
           }));
+        } else if (nlbStopsDetailed.length > 0) {
+          finalStops = nlbStopsDetailed.map(s => ({
+            seq: s.seq,
+            name: s.name,
+            kmbName: null,
+            ctbName: null,
+            nlbStopId: s.stopId,
+            nlbRouteId: s.nlbRouteId
+          }));
         }
 
-        // Sort chronologically by sequence
         finalStops.sort((a, b) => a.seq - b.seq);
-
-        // Apply Universal Calendar-Aware Stop Filtering
         finalStops = filterCalendarAwareStops(finalStops, route.route);
 
-        // Re-number sequence numbers to maintain clean 1..N order
         finalStops.forEach((s, idx) => {
           s.displaySeq = idx + 1;
         });
@@ -625,11 +665,11 @@
         let fetchPromises = [];
 
         if (stop.kmbStopId) {
-          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB') || { serviceType: '1' };
+          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           fetchPromises.push(
             fetch(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
               .then(r => r.json())
-              .then(res => (res.data || []).map(item => ({ ...item, defaultCo: 'KMB' })))
+              .then(res => (res.data || []).map(item => ({ ...item, defaultCo: item.co || 'KMB' })))
               .catch(() => [])
           );
         }
@@ -639,6 +679,20 @@
             fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
               .then(r => r.json())
               .then(res => (res.data || []).map(item => ({ ...item, defaultCo: 'CTB' })))
+              .catch(() => [])
+          );
+        }
+
+        if (stop.nlbStopId && stop.nlbRouteId) {
+          fetchPromises.push(
+            fetch(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}`)
+              .then(r => r.json())
+              .then(res => (res.estimatedArrivals || []).map(item => ({
+                eta: item.estimatedArrivalAt,
+                co: 'NLB',
+                defaultCo: 'NLB',
+                rmk_tc: item.departed ? '已開出' : (item.noService ? '不提供服務' : '')
+              })))
               .catch(() => [])
           );
         }
@@ -687,6 +741,7 @@
           })
           .filter(item => item !== null);
 
+        // Deduplicate identical ETAs
         const uniqueEtas = [];
         const seen = new Set();
         formattedEtas.forEach(item => {
@@ -697,7 +752,10 @@
           }
         });
 
+        // Strictly sort ALL arrival items across all bus companies in chronological order
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
+
+        // Always show the top 3 earliest ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
@@ -716,11 +774,21 @@
               durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
             }
 
-            const isKmb = item.company === 'KMB';
-            const coBg = isKmb ? 'bg-red-700 text-white' : 'bg-amber-400 text-amber-950';
-            const coName = isKmb ? '九巴' : '城巴';
-            const companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
+            let coBg = 'bg-amber-400 text-amber-950';
+            let coName = '城巴';
 
+            if (item.company === 'KMB') {
+              coBg = 'bg-red-700 text-white';
+              coName = '九巴';
+            } else if (item.company === 'LWB') {
+              coBg = 'bg-teal-700 text-white';
+              coName = '龍運';
+            } else if (item.company === 'NLB') {
+              coBg = 'bg-cyan-700 text-white';
+              coName = '嶼巴';
+            }
+
+            const companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
             const rmkTag = item.rmk ? `<span class="text-xs bg-amber-200/20 px-1.5 py-0.5 rounded text-amber-200 font-normal">${item.rmk}</span>` : '';
 
             badge.innerHTML = `
