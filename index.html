@@ -61,7 +61,7 @@
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
-      <p class="mt-3 text-stone-600 font-medium">從政府 Open API 實時載入最新路線數據中...</p>
+      <p class="mt-3 text-stone-600 font-medium">實時載入最新路線數據中...</p>
     </div>
 
     <!-- Route List View -->
@@ -90,7 +90,7 @@
 
     function fetchFresh(url, options = {}) {
       const sep = url.includes('?') ? '&' : '?';
-      const freshUrl = `${url}${sep}_t=${Date.now()}`;
+      const freshUrl = options.method === 'POST' ? url : `${url}${sep}_t=${Date.now()}`;
       return fetch(freshUrl, {
         ...options,
         cache: 'no-store'
@@ -107,11 +107,11 @@
     }
 
     function splitRouteDescription(desc) {
-      if (!desc) return { orig: '起點', dest: '終點' };
+      if (!desc) return { orig: '', dest: '' };
       const parts = desc.split(/[\>|–|—|\-|\⇄|至|往]/).map(p => p.trim()).filter(Boolean);
       return {
-        orig: parts[0] || '起點',
-        dest: parts[1] || parts[0] || '終點'
+        orig: parts[0] || '',
+        dest: parts[1] || parts[0] || ''
       };
     }
 
@@ -266,12 +266,21 @@
       ctbStopMap.clear();
 
       try {
-        const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
+        const [kmbRes, ctbRes, nlbRes, mtrResGet] = await Promise.all([
           fetchFresh(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
           fetchFresh(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
           fetchFresh(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] })),
-          fetchFresh(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json()).catch(() => ({ busRoutes: [] }))
+          fetchFresh(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json()).catch(() => null)
         ]);
+
+        let mtrRes = mtrResGet;
+        if (!mtrRes || (!mtrRes.busRoutes && !mtrRes.routes && !mtrRes.bus && !mtrRes.data)) {
+          mtrRes = await fetchFresh(`${MTR_BASE}/getRoute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ language: 'zh' })
+          }).then(r => r.json()).catch(() => ({}));
+        }
 
         const kmbRoutes = (kmbRes.data || []).map(r => {
           const isLwb = (r.route && (r.route.startsWith('A') || r.route.startsWith('E') || r.route.startsWith('N') || r.route.startsWith('R') || r.route.startsWith('S'))) && !['101','102','112'].includes(r.route);
@@ -296,30 +305,38 @@
 
         const rawNlb = nlbRes.routes || nlbRes.data || [];
         const nlbRoutes = rawNlb.map(r => {
-          const parsed = splitRouteDescription(r.routeNameTC || r.routeName || '');
+          let orig = r.orig_tc || r.origNameTC || r.origNameC || '';
+          let dest = r.dest_tc || r.destNameTC || r.destNameC || '';
+
+          if (!orig || !dest) {
+            const parsed = splitRouteDescription(r.routeNameTC || r.routeName_tc || r.routeName || '');
+            if (!orig) orig = parsed.orig;
+            if (!dest) dest = parsed.dest;
+          }
+
           return {
             company: 'NLB',
-            route: r.routeNo ? r.routeNo.trim() : '',
+            route: r.routeNo ? r.routeNo.trim() : (r.route_no ? r.route_no.trim() : ''),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig,
-            destTc: parsed.dest,
-            nlbRouteId: String(r.routeId)
+            origTc: orig || '大嶼山',
+            destTc: dest || '市中心',
+            nlbRouteId: String(r.routeId || r.route_id)
           };
         });
 
         const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || mtrRes.data || [];
         const mtrRoutes = rawMtr.map(r => {
-          const name = r.routeName || r.route || '';
-          const desc = r.routeDescription || r.description || '';
+          const name = r.routeName || r.route || r.routeNameZh || '';
+          const desc = r.routeDescription || r.description || r.routeNameZh || '';
           const parsed = splitRouteDescription(desc);
           return {
             company: 'MTRB',
             route: name.trim(),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig,
-            destTc: parsed.dest
+            origTc: parsed.orig || '港鐵站',
+            destTc: parsed.dest || '市中心'
           };
         });
 
@@ -606,7 +623,14 @@
         }
 
         if (route.companies.includes('MTRB')) {
-          const res = await fetchFresh(`${MTR_BASE}/getRouteStops?routeName=${encodeURIComponent(route.route)}&language=zh`).then(r => r.json()).catch(() => ({ busStops: [] }));
+          let res = await fetchFresh(`${MTR_BASE}/getRouteStops?routeName=${encodeURIComponent(route.route)}&language=zh`).then(r => r.json()).catch(() => null);
+          if (!res || (!res.busStops && !res.stops && !res.busStop && !res.data)) {
+            res = await fetchFresh(`${MTR_BASE}/getRouteStops`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ routeName: route.route, language: 'zh' })
+            }).then(r => r.json()).catch(() => ({}));
+          }
 
           const rawStops = res.busStops || res.stops || res.busStop || res.data || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
@@ -786,19 +810,24 @@
 
         if (stop.mtrStopId) {
           fetchPromises.push(
-            fetchFresh(`${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`)
-              .then(r => r.json())
-              .then(res => {
-                const buses = res.bus || res.busStops?.[0]?.bus || res.busStop?.[0]?.bus || res.estimatedArrivals || [];
-                return buses.map(b => ({
-                  eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
-                  arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : undefined,
-                  co: 'MTRB',
-                  defaultCo: 'MTRB',
-                  rmk_tc: b.remarks || b.remark || b.arrivalTimeText || ''
-                }));
-              })
-              .catch(() => [])
+            (async () => {
+              let res = await fetchFresh(`${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`).then(r => r.json()).catch(() => null);
+              if (!res || (!res.bus && !res.busStops && !res.busStop && !res.estimatedArrivals)) {
+                res = await fetchFresh(`${MTR_BASE}/getEstimatedArrival`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ routeName: currentSelectedRoute.route, busStopId: stop.mtrStopId, language: 'zh' })
+                }).then(r => r.json()).catch(() => ({}));
+              }
+              const buses = res.bus || res.busStops?.[0]?.bus || res.busStop?.[0]?.bus || res.estimatedArrivals || [];
+              return buses.map(b => ({
+                eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
+                arrivalTimeInSecond: typeof b.arrivalTimeInSecond === 'number' ? b.arrivalTimeInSecond : undefined,
+                co: 'MTRB',
+                defaultCo: 'MTRB',
+                rmk_tc: b.remarks || b.remark || b.arrivalTimeText || ''
+              }));
+            })()
           );
         }
 
