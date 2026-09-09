@@ -39,7 +39,7 @@
 
     <!-- Search Section (Route View Only) -->
     <div id="searchSection" class="bg-white p-4 rounded-xl shadow-md mb-4">
-      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 102, 112, 960)..." 
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 101, 102, 112, 960)..." 
         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
 
@@ -304,6 +304,69 @@
       loadStopsForCurrentRoute();
     }
 
+    async function fetchCtbStopDetails(rawStops) {
+      return await Promise.all(rawStops.map(async (s) => {
+        let name = `巴士站 ${s.seq}`;
+        let lat = null, long = null;
+        try {
+          const stopRes = await fetch(`${CTB_BASE}/stop/${s.stop}`).then(r => r.json());
+          if (stopRes.data) {
+            name = stopRes.data.name_tc || name;
+            lat = parseFloat(stopRes.data.lat);
+            long = parseFloat(stopRes.data.long);
+          }
+        } catch (e) {}
+        return { stopId: s.stop, seq: s.seq, name, lat, long };
+      }));
+    }
+
+    async function getMatchingCtbStops(routeNumber, kmbStops) {
+      if (!kmbStops || kmbStops.length === 0) return [];
+      
+      try {
+        const [outRes, inRes] = await Promise.all([
+          fetch(`${CTB_BASE}/route-stop/CTB/${routeNumber}/outbound`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${CTB_BASE}/route-stop/CTB/${routeNumber}/inbound`).then(r => r.json()).catch(() => ({ data: [] }))
+        ]);
+
+        const outStops = outRes.data || [];
+        const inStops = inRes.data || [];
+
+        if (outStops.length === 0 && inStops.length === 0) return [];
+        if (outStops.length === 0) return await fetchCtbStopDetails(inStops);
+        if (inStops.length === 0) return await fetchCtbStopDetails(outStops);
+
+        // Determine which CTB direction matches KMB's start & end stops
+        const kmbFirst = kmbStops[0];
+        const [outFirstDetail, inFirstDetail] = await Promise.all([
+          fetch(`${CTB_BASE}/stop/${outStops[0].stop}`).then(r => r.json()).catch(() => ({ data: null })),
+          fetch(`${CTB_BASE}/stop/${inStops[0].stop}`).then(r => r.json()).catch(() => ({ data: null }))
+        ]);
+
+        const outFirstLat = parseFloat(outFirstDetail.data?.lat);
+        const outFirstLong = parseFloat(outFirstDetail.data?.long);
+        const inFirstLat = parseFloat(inFirstDetail.data?.lat);
+        const inFirstLong = parseFloat(inFirstDetail.data?.long);
+
+        let outDist = Infinity;
+        let inDist = Infinity;
+
+        if (kmbFirst.lat && kmbFirst.long) {
+          if (outFirstLat && outFirstLong) {
+            outDist = Math.hypot(kmbFirst.lat - outFirstLat, kmbFirst.long - outFirstLong);
+          }
+          if (inFirstLat && inFirstLong) {
+            inDist = Math.hypot(kmbFirst.lat - inFirstLat, kmbFirst.long - inFirstLong);
+          }
+        }
+
+        const chosenRawStops = (outDist < inDist) ? outStops : inStops;
+        return await fetchCtbStopDetails(chosenRawStops);
+      } catch (e) {
+        return [];
+      }
+    }
+
     async function loadStopsForCurrentRoute() {
       showLoading(true);
       document.getElementById('stopListView').classList.add('hidden');
@@ -315,7 +378,6 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        // Fetch KMB stops & details (including GPS coordinates)
         if (route.companies.includes('KMB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB') || {};
           const isOutbound = route.dir === 'outbound';
@@ -338,26 +400,16 @@
           }));
         }
 
-        // Fetch CTB stops & details (including GPS coordinates)
         if (route.companies.includes('CTB')) {
-          const isOutbound = route.dir === 'outbound';
-          const dir = isOutbound ? 'outbound' : 'inbound';
-          const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
-          const rawStops = res.data || [];
-
-          ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
-            let name = `巴士站 ${s.seq}`;
-            let lat = null, long = null;
-            try {
-              const stopRes = await fetch(`${CTB_BASE}/stop/${s.stop}`).then(r => r.json());
-              if (stopRes.data) {
-                name = stopRes.data.name_tc || name;
-                lat = parseFloat(stopRes.data.lat);
-                long = parseFloat(stopRes.data.long);
-              }
-            } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name, lat, long };
-          }));
+          if (isJoint && kmbStopsDetailed.length > 0) {
+            // Automatically detect matching CTB direction
+            ctbStopsDetailed = await getMatchingCtbStops(route.route, kmbStopsDetailed);
+          } else {
+            const isOutbound = route.dir === 'outbound';
+            const dir = isOutbound ? 'outbound' : 'inbound';
+            const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
+            ctbStopsDetailed = await fetchCtbStopDetails(res.data || []);
+          }
         }
 
         // Accurately pair KMB and CTB stops using GPS location & name matching
@@ -439,15 +491,16 @@
         const results = await Promise.all(fetchPromises);
         const rawEtas = results.flat();
         const now = new Date();
-        const targetDirCode = currentSelectedRoute.dir === 'outbound' ? 'O' : 'I';
 
         const formattedEtas = rawEtas
           .filter(item => {
             if (!item || !item.eta) return false;
 
-            if (item.dir) {
-              const itemDir = item.dir.toUpperCase();
-              if (itemDir !== targetDirCode && itemDir !== currentSelectedRoute.dir.toUpperCase()) {
+            // Filter out buses heading back to the origin terminal (e.g. at terminus stops)
+            if (item.dest_tc) {
+              const destClean = cleanStopName(item.dest_tc);
+              const origClean = cleanStopName(currentSelectedRoute.origTc);
+              if (destClean && origClean && destClean === origClean && destClean !== cleanStopName(currentSelectedRoute.destTc)) {
                 return false;
               }
             }
@@ -483,7 +536,7 @@
 
         uniqueEtas.sort((a, b) => a.mins - b.mins);
         
-        // Show exactly the 3 most current ETAs
+        // Show top 3 earliest ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
