@@ -68,34 +68,65 @@
 
     let allRoutes = [];
     let currentSelectedRoute = null;
+    let currentSelectedStop = null;
+    let currentActiveCard = null;
+    let autoRefreshTimer = null;
+
+    // In-memory stop caches for instant stop name resolution
+    const kmbStopMap = new Map();
+    const ctbStopMap = new Map();
 
     function cleanStopName(name) {
       if (!name) return '';
       return name
         .replace(/（.*?）|\(.*?\)|【.*?】/g, '')
-        .replace(/巴士總站|總站|分站|車站|特別班次|循環線|轉乘站|市中心|廣場|大廈|商場/g, '')
+        .replace(/巴士總站|總站|分站|車站|特別班次|循環線|轉乘站|市中心|廣場|大廈|商場|碼頭|邨|屋邨|公園|花園|鐵路站|港鐵站/g, '')
         .replace(/[，, \-_]/g, '')
         .trim();
     }
 
+    // Determines if two routes are genuinely joint-operated cross-harbour routes
     function isSameJointRoute(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       
-      const t1 = [cleanStopName(r1.origTc), cleanStopName(r1.destTc)];
-      const t2 = [cleanStopName(r2.origTc), cleanStopName(r2.destTc)];
+      const routeNum = r1.route.toUpperCase();
+      // Hong Kong Cross-Harbour Joint Route Numbering Pattern (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, etc.)
+      const isCrossHarbourPattern = /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N9\d\d|X\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(routeNum);
       
-      for (let a of t1) {
-        if (!a || a.length < 2) continue;
-        for (let b of t2) {
-          if (!b || b.length < 2) continue;
-          if (a.includes(b) || b.includes(a)) return true;
-          for (let i = 0; i < a.length - 1; i++) {
-            const sub = a.substring(i, i + 2);
-            if (b.includes(sub)) return true;
+      const cOrig1 = cleanStopName(r1.origTc);
+      const cDest1 = cleanStopName(r1.destTc);
+      const cOrig2 = cleanStopName(r2.origTc);
+      const cDest2 = cleanStopName(r2.destTc);
+
+      const isEndpointsMatch = (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) &&
+                               (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1)));
+
+      return isCrossHarbourPattern || isEndpointsMatch;
+    }
+
+    async function getStopDetail(company, stopId) {
+      if (company === 'KMB') {
+        if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
+        try {
+          const res = await fetch(`${KMB_BASE}/stop/${stopId}`).then(r => r.json());
+          if (res.data) {
+            const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+            kmbStopMap.set(stopId, info);
+            return info;
           }
-        }
+        } catch (e) {}
+      } else {
+        if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
+        try {
+          const res = await fetch(`${CTB_BASE}/stop/${stopId}`).then(r => r.json());
+          if (res.data) {
+            const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+            ctbStopMap.set(stopId, info);
+            return info;
+          }
+        } catch (e) {}
       }
-      return false;
+      return { name: `巴士站 ${stopId}`, lat: null, long: null };
     }
 
     function findBestCtbMatch(kStop, ctbStops) {
@@ -136,10 +167,35 @@
     async function fetchAllRoutes() {
       showLoading(true);
       try {
-        const [kmbRes, ctbRes] = await Promise.all([
+        // Proactively fetch routes AND bulk stop dictionaries in parallel
+        const [kmbRes, ctbRes, kmbStopsRes, ctbStopsRes] = await Promise.all([
           fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] }))
+          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${KMB_BASE}/stop`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${CTB_BASE}/stop/CTB`).then(r => r.json()).catch(() => fetch(`${CTB_BASE}/stop`).then(r => r.json()).catch(() => ({ data: [] })))
         ]);
+
+        // Pre-populate KMB stops cache
+        if (kmbStopsRes.data && Array.isArray(kmbStopsRes.data)) {
+          kmbStopsRes.data.forEach(s => {
+            kmbStopMap.set(s.stop, {
+              name: s.name_tc || s.name_en,
+              lat: parseFloat(s.lat),
+              long: parseFloat(s.long)
+            });
+          });
+        }
+
+        // Pre-populate Citybus stops cache
+        if (ctbStopsRes.data && Array.isArray(ctbStopsRes.data)) {
+          ctbStopsRes.data.forEach(s => {
+            ctbStopMap.set(s.stop, {
+              name: s.name_tc || s.name_en,
+              lat: parseFloat(s.lat),
+              long: parseFloat(s.long)
+            });
+          });
+        }
 
         const kmbRoutes = (kmbRes.data || []).map(r => ({
           company: 'KMB',
@@ -245,6 +301,7 @@
     }
 
     async function selectRoute(mergedRoute) {
+      stopAutoRefresh();
       const primaryCompany = mergedRoute.companies.includes('KMB') ? 'KMB' : mergedRoute.companies[0];
       const primaryVariant = mergedRoute.variants.find(v => v.company === primaryCompany) || mergedRoute.variants[0];
 
@@ -294,6 +351,7 @@
 
     function toggleDirection() {
       if (!currentSelectedRoute) return;
+      stopAutoRefresh();
 
       const temp = currentSelectedRoute.origTc;
       currentSelectedRoute.origTc = currentSelectedRoute.destTc;
@@ -309,17 +367,8 @@
 
     async function fetchCtbStopDetails(rawStops) {
       return await Promise.all(rawStops.map(async (s) => {
-        let name = `巴士站 ${s.seq}`;
-        let lat = null, long = null;
-        try {
-          const stopRes = await fetch(`${CTB_BASE}/stop/${s.stop}`).then(r => r.json());
-          if (stopRes.data) {
-            name = stopRes.data.name_tc || name;
-            lat = parseFloat(stopRes.data.lat);
-            long = parseFloat(stopRes.data.long);
-          }
-        } catch (e) {}
-        return { stopId: s.stop, seq: s.seq, name, lat, long };
+        const info = await getStopDetail('CTB', s.stop);
+        return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
       }));
     }
 
@@ -341,24 +390,19 @@
 
         const kmbFirst = kmbStops[0];
         const [outFirstDetail, inFirstDetail] = await Promise.all([
-          fetch(`${CTB_BASE}/stop/${outStops[0].stop}`).then(r => r.json()).catch(() => ({ data: null })),
-          fetch(`${CTB_BASE}/stop/${inStops[0].stop}`).then(r => r.json()).catch(() => ({ data: null }))
+          getStopDetail('CTB', outStops[0].stop),
+          getStopDetail('CTB', inStops[0].stop)
         ]);
-
-        const outFirstLat = parseFloat(outFirstDetail.data?.lat);
-        const outFirstLong = parseFloat(outFirstDetail.data?.long);
-        const inFirstLat = parseFloat(inFirstDetail.data?.lat);
-        const inFirstLong = parseFloat(inFirstDetail.data?.long);
 
         let outDist = Infinity;
         let inDist = Infinity;
 
         if (kmbFirst.lat && kmbFirst.long) {
-          if (outFirstLat && outFirstLong) {
-            outDist = Math.hypot(kmbFirst.lat - outFirstLat, kmbFirst.long - outFirstLong);
+          if (outFirstDetail.lat && outFirstDetail.long) {
+            outDist = Math.hypot(kmbFirst.lat - outFirstDetail.lat, kmbFirst.long - outFirstDetail.long);
           }
-          if (inFirstLat && inFirstLong) {
-            inDist = Math.hypot(kmbFirst.lat - inFirstLat, kmbFirst.long - inFirstLong);
+          if (inFirstDetail.lat && inFirstDetail.long) {
+            inDist = Math.hypot(kmbFirst.lat - inFirstDetail.lat, kmbFirst.long - inFirstDetail.long);
           }
         }
 
@@ -388,17 +432,8 @@
           const rawStops = res.data || [];
 
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
-            let name = `巴士站 ${s.seq}`;
-            let lat = null, long = null;
-            try {
-              const stopRes = await fetch(`${KMB_BASE}/stop/${s.stop}`).then(r => r.json());
-              if (stopRes.data) {
-                name = stopRes.data.name_tc || name;
-                lat = parseFloat(stopRes.data.lat);
-                long = parseFloat(stopRes.data.long);
-              }
-            } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name, lat, long };
+            const info = await getStopDetail('KMB', s.stop);
+            return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
           }));
         }
 
@@ -446,7 +481,7 @@
       stops.forEach(s => {
         const card = document.createElement('div');
         card.className = "bg-white p-3.5 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 transition cursor-pointer flex items-center space-x-3";
-        card.onclick = () => fetchETA(s, card);
+        card.onclick = () => fetchETA(s, card, false);
 
         card.innerHTML = `
           <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
@@ -458,7 +493,10 @@
       });
     }
 
-    async function fetchETA(stop, activeCard) {
+    async function fetchETA(stop, activeCard, isAutoRefresh = false) {
+      currentSelectedStop = stop;
+      currentActiveCard = activeCard;
+
       document.querySelectorAll('#stopListView > div').forEach(el => {
         el.classList.remove('border-amber-600', 'bg-amber-50/80', 'shadow-md');
       });
@@ -468,7 +506,10 @@
 
       document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
       const etaContainer = document.getElementById('etaContainer');
-      etaContainer.innerHTML = `<span class="text-sm text-stone-500 animate-pulse flex items-center space-x-1"><span>🍄</span><span>查詢實時時間中...</span></span>`;
+
+      if (!isAutoRefresh) {
+        etaContainer.innerHTML = `<span class="text-sm text-stone-500 animate-pulse flex items-center space-x-1"><span>🍄</span><span>查詢實時時間中...</span></span>`;
+      }
 
       try {
         let fetchPromises = [];
@@ -514,9 +555,9 @@
             const etaDate = new Date(item.eta);
             let diffMin = Math.round((etaDate - now) / 60000);
             
-            // At stop 1 (origin) or for un-departed buses, preserve scheduled ETAs
+            // Preserve scheduled ETAs at start stop or for upcoming departures
             if (diffMin < 0) {
-              if (stop.seq === 1 || diffMin >= -5) {
+              if (stop.seq === 1 || diffMin >= -3) {
                 diffMin = 0;
               } else {
                 return null;
@@ -552,7 +593,7 @@
         // Sort chronologically
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
         
-        // Strictly show the top 3 ETAs
+        // Always display the top 3 ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
@@ -588,12 +629,37 @@
             etaContainer.appendChild(badge);
           });
         }
+
+        // Reset and set 30-second auto-refresh timer
+        if (!isAutoRefresh) {
+          startAutoRefresh();
+        }
+
       } catch (err) {
-        etaContainer.innerHTML = `<span class="text-sm text-rose-600">無法獲取實時數據</span>`;
+        if (!isAutoRefresh) {
+          etaContainer.innerHTML = `<span class="text-sm text-rose-600">無法獲取實時數據</span>`;
+        }
+      }
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      autoRefreshTimer = setInterval(() => {
+        if (currentSelectedStop) {
+          fetchETA(currentSelectedStop, currentActiveCard, true);
+        }
+      }, 30000);
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
       }
     }
 
     function showRouteList() {
+      stopAutoRefresh();
       document.getElementById('routeListView').classList.remove('hidden');
       document.getElementById('searchSection').classList.remove('hidden');
       document.getElementById('stopListView').classList.add('hidden');
