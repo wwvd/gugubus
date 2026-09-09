@@ -41,17 +41,27 @@
       <div id="etaContainer" class="mt-3 flex flex-wrap gap-2"></div>
     </div>
 
-    <!-- Search Section (Route View Only) -->
-    <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4">
-      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 101, 102, 112, 960, A21, 38X)..." 
+    <!-- Search & Company Filter Section -->
+    <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4 space-y-3">
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 101, A21, K51, 3M)..." 
         class="w-full px-4 py-2 border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-700 focus:border-amber-700 bg-amber-50/20 placeholder-stone-400">
+      
+      <!-- Company Filter Pills -->
+      <div class="flex flex-wrap gap-1.5 text-xs font-semibold pt-1" id="companyPillGroup">
+        <button onclick="setCompanyFilter('ALL')" class="pill-btn active px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]" data-[#7a4831]="ALL">全部</button>
+        <button onclick="setCompanyFilter('KMB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="KMB">九巴</button>
+        <button onclick="setCompanyFilter('CTB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="CTB">城巴</button>
+        <button onclick="setCompanyFilter('LWB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="LWB">龍運</button>
+        <button onclick="setCompanyFilter('NLB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="NLB">嶼巴</button>
+        <button onclick="setCompanyFilter('MTRB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="MTRB">港鐵巴士</button>
+      </div>
     </div>
 
     <!-- Loading Spinner -->
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
-      <p class="mt-3 text-stone-600 font-medium">載入菇菇巴士數據中 (九巴 / 城巴 / 龍運 / 嶼巴)...</p>
+      <p class="mt-3 text-stone-600 font-medium">載入菇菇巴士數據中 (九巴 / 城巴 / 龍運 / 嶼巴 / 港鐵巴士)...</p>
     </div>
 
     <!-- Route List View -->
@@ -66,14 +76,15 @@
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
     const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
+    const MTR_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus";
 
     let allRoutes = [];
     let currentSelectedRoute = null;
     let currentSelectedStop = null;
     let currentActiveCard = null;
     let autoRefreshTimer = null;
+    let activeCompanyFilter = 'ALL';
 
-    // Stop caches for instant stop name resolution
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
@@ -86,7 +97,6 @@
         .trim();
     }
 
-    // Universal Calendar-Aware Stop Filter for ALL bus routes
     function filterCalendarAwareStops(stops, routeNum) {
       const now = new Date();
       const day = now.getDay();
@@ -139,9 +149,7 @@
 
     function isSameRouteGroup(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
-
       if (r1.company === r2.company) return true;
-
       if (!isJointRouteNumber(r1.route)) return false;
 
       const cOrig1 = cleanStopName(r1.origTc);
@@ -218,10 +226,15 @@
     async function fetchAllRoutes() {
       showLoading(true);
       try {
-        const [kmbRes, ctbRes, nlbRes] = await Promise.all([
+        const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
           fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
           fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] }))
+          fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] })),
+          fetch(`${MTR_BASE}/getRoute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ language: 'zh' })
+          }).then(r => r.json()).catch(() => ({ busRoutes: [] }))
         ]);
 
         const kmbRoutes = (kmbRes.data || []).map(r => {
@@ -245,17 +258,33 @@
           destTc: r.dest_tc
         }));
 
-        const nlbRoutes = (nlbRes.routes || []).map(r => ({
-          company: 'NLB',
-          route: r.routeNo ? r.routeNo.trim() : '',
-          bound: 'outbound',
-          serviceType: '1',
-          origTc: r.origNameTC || r.routeNameTC?.split('>')?.[0] || '大嶼山',
-          destTc: r.destNameTC || r.routeNameTC?.split('>')?.[1] || '東涌',
-          nlbRouteId: r.routeId
-        }));
+        const nlbRoutes = (nlbRes.routes || []).map(r => {
+          const nameParts = (r.routeNameTC || '').split('>');
+          return {
+            company: 'NLB',
+            route: r.routeNo ? r.routeNo.trim() : '',
+            bound: 'outbound',
+            serviceType: '1',
+            origTc: r.origNameTC || nameParts[0]?.trim() || '大嶼山',
+            destTc: r.destNameTC || nameParts[1]?.trim() || '目的地',
+            nlbRouteId: r.routeId
+          };
+        });
 
-        const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes];
+        const mtrRoutes = (mtrRes.busRoutes || []).map(r => {
+          const desc = r.routeDescription || '';
+          const parts = desc.split(/[\⇄\-\>]/);
+          return {
+            company: 'MTRB',
+            route: r.routeName ? r.routeName.trim() : '',
+            bound: 'outbound',
+            serviceType: '1',
+            origTc: parts[0]?.trim() || '屯門/元朗',
+            destTc: parts[1]?.trim() || '西鐵站'
+          };
+        });
+
+        const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes, ...mtrRoutes];
         const routeGroups = [];
 
         combined.forEach(r => {
@@ -277,7 +306,7 @@
           matchedGroup.companies.add(r.company);
           
           const isDuplicateVariant = matchedGroup.variants.some(v => 
-            v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType
+            v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType && v.nlbRouteId === r.nlbRouteId
           );
           if (!isDuplicateVariant) {
             matchedGroup.variants.push(r);
@@ -301,6 +330,18 @@
       }
     }
 
+    function setCompanyFilter(co) {
+      activeCompanyFilter = co;
+      document.querySelectorAll('#companyPillGroup button').forEach(btn => {
+        if (btn.getAttribute('data-co') === co || (co === 'ALL' && !btn.getAttribute('data-co'))) {
+          btn.className = "pill-btn px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]";
+        } else {
+          btn.className = "pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70";
+        }
+      });
+      filterRoutes();
+    }
+
     function renderRoutes(routes) {
       const container = document.getElementById('routeListView');
       container.innerHTML = '';
@@ -316,18 +357,11 @@
         card.onclick = () => selectRoute(r);
 
         let badgesHtml = '';
-        if (r.companies.includes('KMB')) {
-          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white mr-1 shadow-sm">九巴</span>`;
-        }
-        if (r.companies.includes('LWB')) {
-          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white mr-1 shadow-sm">龍運</span>`;
-        }
-        if (r.companies.includes('CTB')) {
-          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950 mr-1 shadow-sm">城巴</span>`;
-        }
-        if (r.companies.includes('NLB')) {
-          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-cyan-700 text-white mr-1 shadow-sm">嶼巴</span>`;
-        }
+        if (r.companies.includes('KMB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white mr-1 shadow-sm">九巴</span>`;
+        if (r.companies.includes('LWB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white mr-1 shadow-sm">龍運</span>`;
+        if (r.companies.includes('CTB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950 mr-1 shadow-sm">城巴</span>`;
+        if (r.companies.includes('NLB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-cyan-700 text-white mr-1 shadow-sm">嶼巴</span>`;
+        if (r.companies.includes('MTRB')) badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-indigo-700 text-white mr-1 shadow-sm">港鐵</span>`;
 
         card.innerHTML = `
           <div class="flex items-center space-x-3">
@@ -342,7 +376,11 @@
 
     function filterRoutes() {
       const query = document.getElementById('searchInput').value.trim().toUpperCase();
-      const filtered = allRoutes.filter(r => !query || r.route.toUpperCase().includes(query));
+      const filtered = allRoutes.filter(r => {
+        const matchesQuery = !query || r.route.toUpperCase().includes(query);
+        const matchesCo = (activeCompanyFilter === 'ALL') || r.companies.includes(activeCompanyFilter);
+        return matchesQuery && matchesCo;
+      });
       renderRoutes(filtered);
     }
 
@@ -378,18 +416,11 @@
       const headerEl = document.getElementById('selectedRouteHeader');
       
       let companyBadges = '';
-      if (currentSelectedRoute.companies.includes('KMB')) {
-        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white">九巴</span>`;
-      }
-      if (currentSelectedRoute.companies.includes('LWB')) {
-        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white">龍運</span>`;
-      }
-      if (currentSelectedRoute.companies.includes('CTB')) {
-        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950">城巴</span>`;
-      }
-      if (currentSelectedRoute.companies.includes('NLB')) {
-        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-cyan-700 text-white">嶼巴</span>`;
-      }
+      if (currentSelectedRoute.companies.includes('KMB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white">九巴</span>`;
+      if (currentSelectedRoute.companies.includes('LWB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-teal-700 text-white">龍運</span>`;
+      if (currentSelectedRoute.companies.includes('CTB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950">城巴</span>`;
+      if (currentSelectedRoute.companies.includes('NLB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-cyan-700 text-white">嶼巴</span>`;
+      if (currentSelectedRoute.companies.includes('MTRB')) companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-indigo-700 text-white">港鐵</span>`;
 
       headerEl.innerHTML = `
         <div class="flex items-center space-x-1">${companyBadges}</div>
@@ -476,6 +507,7 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
         let nlbStopsDetailed = [];
+        let mtrStopsDetailed = [];
 
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
@@ -502,18 +534,45 @@
         }
 
         if (route.companies.includes('NLB')) {
-          const nlbVar = route.variants.find(v => v.company === 'NLB');
-          if (nlbVar && nlbVar.nlbRouteId) {
-            const res = await fetch(`${NLB_BASE}/stop.php?action=getStop&routeId=${nlbVar.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
+          const nlbVars = route.variants.filter(v => v.company === 'NLB');
+          let chosenVariant = nlbVars[0];
+          
+          if (nlbVars.length > 1) {
+            chosenVariant = nlbVars.find(v => {
+              const cleanDest = cleanStopName(v.destTc);
+              const cleanCurrentDest = cleanStopName(route.destTc);
+              return cleanDest.includes(cleanCurrentDest) || cleanCurrentDest.includes(cleanDest);
+            }) || nlbVars[0];
+          }
+
+          if (chosenVariant && chosenVariant.nlbRouteId) {
+            const res = await fetch(`${NLB_BASE}/stop.php?action=getStop&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
             nlbStopsDetailed = (res.stops || []).map((s, idx) => ({
               stopId: s.stopId,
               seq: idx + 1,
               name: s.stopNameTC || s.stopNameEN,
               lat: parseFloat(s.latitude),
               long: parseFloat(s.longitude),
-              nlbRouteId: nlbVar.nlbRouteId
+              nlbRouteId: chosenVariant.nlbRouteId
             }));
           }
+        }
+
+        if (route.companies.includes('MTRB')) {
+          const res = await fetch(`${MTR_BASE}/getRouteStops`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ routeName: route.route, language: 'zh' })
+          }).then(r => r.json()).catch(() => ({ stops: [] }));
+
+          const rawStops = res.stops || res.busStop || [];
+          mtrStopsDetailed = rawStops.map((s, idx) => ({
+            stopId: s.stopId,
+            seq: s.sequence || idx + 1,
+            name: s.stopName || s.busStopNameTC,
+            lat: parseFloat(s.latitude),
+            long: parseFloat(s.longitude)
+          }));
         }
 
         let finalStops = [];
@@ -530,32 +589,13 @@
             };
           });
         } else if (kmbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map(s => ({
-            seq: s.seq,
-            name: s.name,
-            kmbName: s.name,
-            ctbName: null,
-            kmbStopId: s.stopId,
-            ctbStopId: null
-          }));
+          finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbName: s.name, ctbName: null, kmbStopId: s.stopId }));
         } else if (ctbStopsDetailed.length > 0) {
-          finalStops = ctbStopsDetailed.map(s => ({
-            seq: s.seq,
-            name: s.name,
-            kmbName: null,
-            ctbName: s.name,
-            kmbStopId: null,
-            ctbStopId: s.stopId
-          }));
+          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbName: null, ctbName: s.name, ctbStopId: s.stopId }));
         } else if (nlbStopsDetailed.length > 0) {
-          finalStops = nlbStopsDetailed.map(s => ({
-            seq: s.seq,
-            name: s.name,
-            kmbName: null,
-            ctbName: null,
-            nlbStopId: s.stopId,
-            nlbRouteId: s.nlbRouteId
-          }));
+          finalStops = nlbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, nlbStopId: s.stopId, nlbRouteId: s.nlbRouteId }));
+        } else if (mtrStopsDetailed.length > 0) {
+          finalStops = mtrStopsDetailed.map(s => ({ seq: s.seq, name: s.name, mtrStopId: s.stopId }));
         }
 
         finalStops.sort((a, b) => a.seq - b.seq);
@@ -697,6 +737,27 @@
           );
         }
 
+        if (stop.mtrStopId) {
+          fetchPromises.push(
+            fetch(`${MTR_BASE}/getEstimatedArrival`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ routeName: currentSelectedRoute.route, stopId: stop.mtrStopId, language: 'zh' })
+            })
+              .then(r => r.json())
+              .then(res => {
+                const buses = res.bus || res.busStop?.[0]?.bus || [];
+                return buses.map(b => ({
+                  eta: b.busArrivalTime || b.arrivalTime || b.busTime,
+                  co: 'MTRB',
+                  defaultCo: 'MTRB',
+                  rmk_tc: b.remarks || ''
+                }));
+              })
+              .catch(() => [])
+          );
+        }
+
         const results = await Promise.all(fetchPromises);
         const rawEtas = results.flat();
         const now = new Date();
@@ -715,7 +776,16 @@
             return true;
           })
           .map(item => {
-            const etaDate = new Date(item.eta);
+            let etaDate;
+            if (typeof item.eta === 'string' && item.eta.length <= 8) {
+              const todayStr = now.toISOString().split('T')[0];
+              etaDate = new Date(`${todayStr}T${item.eta}`);
+            } else {
+              etaDate = new Date(item.eta);
+            }
+
+            if (isNaN(etaDate.getTime())) return null;
+
             let diffMin = Math.round((etaDate - now) / 60000);
             
             if (diffMin < 0) {
@@ -752,10 +822,10 @@
           }
         });
 
-        // Strictly sort ALL arrival items across all bus companies in chronological order
+        // Strictly sort ALL arrival predictions in chronological order across all operators
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
 
-        // Always show the top 3 earliest ETAs
+        // Always display the 3 most recent ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
@@ -786,6 +856,9 @@
             } else if (item.company === 'NLB') {
               coBg = 'bg-cyan-700 text-white';
               coName = '嶼巴';
+            } else if (item.company === 'MTRB') {
+              coBg = 'bg-indigo-700 text-white';
+              coName = '港鐵';
             }
 
             const companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
