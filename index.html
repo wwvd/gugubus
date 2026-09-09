@@ -85,6 +85,27 @@
         .trim();
     }
 
+    // Filter Sunday / Public Holiday pedestrian zone diversion stops for routes like CTB 1, 5B, 10
+    function filterHolidayDiversionStops(stops, routeNum) {
+      const day = new Date().getDay();
+      const isSunday = (day === 0); // 0 = Sunday
+
+      if (['1', '5B', '10'].includes(routeNum.trim().toUpperCase())) {
+        return stops.filter(s => {
+          const name = s.name || '';
+          if (!isSunday) {
+            // Mon-Sat: Filter out Sunday/Holiday diversion stops on Des Voeux Road Central
+            if (name.includes('歷山大廈') || name.includes('遮打花園')) return false;
+          } else {
+            // Sunday: Filter out weekday Chater Road stops
+            if (name.includes('皇后像廣場') || (name.includes('遮打道') && !name.includes('德輔道中'))) return false;
+          }
+          return true;
+        });
+      }
+      return stops;
+    }
+
     // Identifies whether a route number belongs to a Cross-Harbour Joint Route (1xx, 3xx, 6xx, 8xx, 9xx, N1xx, etc.)
     function isJointRouteNumber(routeNum) {
       const norm = routeNum.trim().toUpperCase();
@@ -444,7 +465,18 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: null, ctbStopId: s.stopId }));
         }
 
-        renderStops(finalStops.sort((a, b) => a.seq - b.seq));
+        // Sort chronologically by sequence
+        finalStops.sort((a, b) => a.seq - b.seq);
+
+        // Apply Day-of-Week Pedestrian Zone / Holiday Diversion Filter
+        finalStops = filterHolidayDiversionStops(finalStops, route.route);
+
+        // Re-number sequence numbers to maintain clean 1..N order
+        finalStops.forEach((s, idx) => {
+          s.displaySeq = idx + 1;
+        });
+
+        renderStops(finalStops);
       } catch (err) {
         alert("無法加載車站列表。");
       } finally {
@@ -464,7 +496,7 @@
 
         card.innerHTML = `
           <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
-            ${s.seq}
+            ${s.displaySeq || s.seq}
           </div>
           <div class="text-md font-medium text-stone-800">${s.name}</div>
         `;
@@ -483,7 +515,8 @@
         activeCard.classList.add('border-amber-600', 'bg-amber-50/80', 'shadow-md');
       }
 
-      document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
+      const seqNum = stop.displaySeq || stop.seq;
+      document.getElementById('selectedStopInfo').textContent = `已選車站：${seqNum}. ${stop.name}`;
       const etaContainer = document.getElementById('etaContainer');
 
       if (!isAutoRefresh) {
@@ -534,7 +567,7 @@
             let diffMin = Math.round((etaDate - now) / 60000);
             
             if (diffMin < 0) {
-              if (stop.seq === 1 || diffMin >= -3) {
+              if (seqNum === 1 || diffMin >= -3) {
                 diffMin = 0;
               } else {
                 return null;
@@ -579,7 +612,7 @@
             badge.className = "bg-[#7a4831] text-amber-50 text-sm font-semibold px-3 py-1.5 rounded-xl shadow-sm flex items-center space-x-2 border border-[#633824]";
             
             let durationLabel = '';
-            if (stop.seq === 1) {
+            if (seqNum === 1) {
               durationLabel = item.mins === 0 ? '即將開出' : `${item.mins} 分鐘`;
             } else {
               durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
