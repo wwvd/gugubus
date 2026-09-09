@@ -337,9 +337,27 @@
         const res = await fetch(etaUrl).then(r => r.json());
         const rawEtas = res.data || [];
         const now = new Date();
+        const targetDirCode = currentSelectedRoute.dir === 'outbound' ? 'O' : 'I';
 
         const formattedEtas = rawEtas
-          .filter(item => item && item.eta)
+          .filter(item => {
+            if (!item || !item.eta) return false;
+
+            // Filter out reverse-direction ETAs at terminus stops
+            if (item.dir) {
+              const itemDir = item.dir.toUpperCase();
+              if (itemDir !== targetDirCode && itemDir !== currentSelectedRoute.dir.toUpperCase()) {
+                return false;
+              }
+            }
+
+            // Filter out ETAs belonging to different sequence numbers if sequence is returned
+            if (item.seq && stop.seq && Number(item.seq) !== Number(stop.seq)) {
+              return false;
+            }
+
+            return true;
+          })
           .map(item => {
             const etaDate = new Date(item.eta);
             const diffMin = Math.round((etaDate - now) / 60000);
@@ -347,7 +365,6 @@
 
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
-
             const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : stop.company;
 
             return {
@@ -358,7 +375,7 @@
           })
           .filter(item => item !== null);
 
-        // Deduplicate ETAs
+        // Deduplicate identical ETAs
         const uniqueEtas = [];
         const seen = new Set();
         formattedEtas.forEach(item => {
@@ -370,7 +387,9 @@
         });
 
         uniqueEtas.sort((a, b) => a.mins - b.mins);
-        const nextETAs = uniqueEtas.slice(0, 4);
+
+        // Strict max 3 ETAs to align with official KMB & Citybus apps
+        const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
 
