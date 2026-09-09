@@ -114,10 +114,7 @@
       if (!group || !r || !r.route) return false;
       if (group.route.toUpperCase() !== r.route.toUpperCase()) return false;
 
-      // Same company for same route -> Group into single route entry
       if (group.companies.has(r.company)) return true;
-
-      // Different companies -> ONLY group if it is a Joint Cross-Harbour Route
       if (!isJointRouteNumber(r.route)) return false;
 
       const cOrig1 = cleanStopName(group.origTc);
@@ -138,7 +135,11 @@
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
         const res = await fetchWithTimeout(`${KMB_BASE}/stop/${stopId}`);
         if (res && res.data) {
-          const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+          const info = { 
+            name: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
+            lat: parseFloat(res.data.lat) || null, 
+            long: parseFloat(res.data.long) || null 
+          };
           kmbStopMap.set(stopId, info);
           return info;
         }
@@ -146,12 +147,23 @@
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
         const res = await fetchWithTimeout(`${CTB_BASE}/stop/${stopId}`);
         if (res && res.data) {
-          const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
+          const info = { 
+            name: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
+            lat: parseFloat(res.data.lat) || null, 
+            long: parseFloat(res.data.long) || null 
+          };
           ctbStopMap.set(stopId, info);
           return info;
         }
       }
       return { name: `巴士站 ${stopId}`, lat: null, long: null };
+    }
+
+    function getGpsDistance(s1, s2) {
+      if (!s1 || !s2 || s1.lat == null || s1.long == null || s2.lat == null || s2.long == null) return Infinity;
+      const dLat = s1.lat - s2.lat;
+      const dLong = s1.long - s2.long;
+      return Math.sqrt(dLat * dLat + dLong * dLong);
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -334,11 +346,8 @@
       loadStopsForCurrentRoute();
     }
 
-    // Resolves operator-specific direction parameter by aligning endpoints dynamically
     function getCompanyDir(company, targetOrig, targetDest, variants) {
       const cOrig = cleanStopName(targetOrig);
-      const cDest = cleanStopName(targetDest);
-
       const coVariants = variants.filter(v => v.company === company);
       if (coVariants.length === 0) return null;
 
@@ -361,40 +370,53 @@
       return { dir: boundStr, serviceType: first.serviceType || '1' };
     }
 
-    // Merges aligned stop lists into a single chronological physical route
     function mergeJointStops(kmbStops, ctbStops) {
       if (!kmbStops.length) return ctbStops.map(s => ({ seq: s.seq, name: s.name, ctbStopId: s.stopId }));
       if (!ctbStops.length) return kmbStops.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId }));
 
+      // Reverse CTB stops if physically travelling in opposite direction to KMB
+      const startToStartDist = getGpsDistance(kmbStops[0], ctbStops[0]);
+      const startToEndDist = getGpsDistance(kmbStops[0], ctbStops[ctbStops.length - 1]);
+      if (startToEndDist < startToStartDist) {
+        ctbStops = [...ctbStops].reverse();
+      }
+
       const ctbMatchedIndices = new Set();
       const merged = [];
+      let lastMatchedCtbIdx = -1;
 
       kmbStops.forEach((kStop, kIdx) => {
         const kClean = cleanStopName(kStop.name);
         let bestCtbIdx = -1;
-        let minDistance = Infinity;
+        let minScore = Infinity;
 
         ctbStops.forEach((cStop, cIdx) => {
           if (ctbMatchedIndices.has(cIdx)) return;
+          
+          const gpsDist = getGpsDistance(kStop, cStop);
           const cClean = cleanStopName(cStop.name);
-
-          const isMatch = kClean && cClean && (
+          
+          const isNameMatch = kClean && cClean && (
             kClean === cClean || 
             (kClean.length >= 2 && cClean.includes(kClean)) || 
             (cClean.length >= 2 && kClean.includes(cClean))
           );
 
-          if (isMatch) {
-            const dist = Math.abs(kIdx - cIdx);
-            if (dist < minDistance && dist <= 5) {
-              minDistance = dist;
-              bestCtbIdx = cIdx;
-            }
+          let score = gpsDist;
+          if (isNameMatch) score -= 0.002; 
+          if (cIdx < lastMatchedCtbIdx) score += 0.005;
+
+          const isCloseEnough = (gpsDist <= 0.0018) || (isNameMatch && (gpsDist <= 0.004 || gpsDist === Infinity));
+
+          if (isCloseEnough && score < minScore) {
+            minScore = score;
+            bestCtbIdx = cIdx;
           }
         });
 
         if (bestCtbIdx !== -1) {
           ctbMatchedIndices.add(bestCtbIdx);
+          lastMatchedCtbIdx = bestCtbIdx;
           const cStop = ctbStops[bestCtbIdx];
           
           let displayName = kStop.name;
@@ -402,7 +424,7 @@
           const cNameClean = cleanStopName(cStop.name);
           
           if (kNameClean !== cNameClean && kStop.name !== cStop.name) {
-            displayName = `${kStop.name} (${cStop.name})`;
+            displayName = `${kStop.name} / ${cStop.name}`;
           }
 
           merged.push({
@@ -424,7 +446,7 @@
         if (!ctbMatchedIndices.has(cIdx)) {
           let insertAt = merged.length;
           for (let i = 0; i < merged.length; i++) {
-            if (merged[i].seq > cIdx + 1) {
+            if (merged[i].kmbStopId && cIdx < (i + 1)) {
               insertAt = i;
               break;
             }
@@ -450,7 +472,7 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        // 1. Load KMB Stops (if applicable)
+        // 1. Fetch KMB Stops
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.origTc, route.destTc, route.variants);
@@ -459,25 +481,44 @@
             const rawStops = (res && res.data) || [];
             kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
               const info = await getStopDetail('KMB', s.stop);
-              return { stopId: s.stop, seq: s.seq, name: info.name };
+              return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
             }));
           }
         }
 
-        // 2. Load CTB Stops with Direction Alignment
+        // 2. Fetch CTB Stops (evaluating both directions to select correct physical path)
         if (route.companies.includes('CTB')) {
-          const ctbConfig = getCompanyDir('CTB', route.origTc, route.destTc, route.variants);
-          if (ctbConfig) {
-            const res = await fetchWithTimeout(`${CTB_BASE}/route-stop/CTB/${route.route}/${ctbConfig.dir}`);
-            const rawStops = (res && res.data) || [];
-            ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
-              const info = await getStopDetail('CTB', s.stop);
-              return { stopId: s.stop, seq: s.seq, name: info.name };
-            }));
+          const [resOut, resIn] = await Promise.all([
+            fetchWithTimeout(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`),
+            fetchWithTimeout(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`)
+          ]);
+
+          const rawOut = (resOut && resOut.data) || [];
+          const rawIn = (resIn && resIn.data) || [];
+
+          const ctbOutDetailed = await Promise.all(rawOut.map(async (s) => {
+            const info = await getStopDetail('CTB', s.stop);
+            return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
+          }));
+
+          const ctbInDetailed = await Promise.all(rawIn.map(async (s) => {
+            const info = await getStopDetail('CTB', s.stop);
+            return { stopId: s.stop, seq: s.seq, name: info.name, lat: info.lat, long: info.long };
+          }));
+
+          if (kmbStopsDetailed.length > 0) {
+            const kStart = kmbStopsDetailed[0];
+            const distOut = ctbOutDetailed.length > 0 ? getGpsDistance(kStart, ctbOutDetailed[0]) : Infinity;
+            const distIn = ctbInDetailed.length > 0 ? getGpsDistance(kStart, ctbInDetailed[0]) : Infinity;
+
+            ctbStopsDetailed = (distIn < distOut) ? ctbInDetailed : ctbOutDetailed;
+          } else {
+            const ctbConfig = getCompanyDir('CTB', route.origTc, route.destTc, route.variants);
+            ctbStopsDetailed = (ctbConfig && ctbConfig.dir === 'inbound') ? ctbInDetailed : ctbOutDetailed;
           }
         }
 
-        // 3. Merge stops using direction-aligned matching
+        // 3. Merge stops using GPS + Name alignment
         const finalStops = mergeJointStops(kmbStopsDetailed, ctbStopsDetailed);
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
         renderStops(finalStops);
