@@ -137,9 +137,14 @@
       return /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d|X1\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(norm);
     }
 
-    function isSameJointRoute(r1, r2) {
+    // Consolidation grouping logic: groups outbound/inbound and joint operators into ONE single route entry per line
+    function isSameRouteGroup(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
-      
+
+      // Same company + same route number -> always group into 1 entry (Outbound & Inbound merged into 1 card)
+      if (r1.company === r2.company) return true;
+
+      // Different companies + same route number -> group ONLY if genuine cross-harbour joint route
       if (!isJointRouteNumber(r1.route)) return false;
 
       const cOrig1 = cleanStopName(r1.origTc);
@@ -147,10 +152,13 @@
       const cOrig2 = cleanStopName(r2.origTc);
       const cDest2 = cleanStopName(r2.destTc);
 
-      const directMatch = (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
-                          (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1)));
+      const directOrReverseMatch = 
+        (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1))) ||
+        (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest1))) ||
+        (cOrig1 && cDest2 && (cOrig1.includes(cDest2) || cDest2.includes(cOrig1))) ||
+        (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cOrig2.includes(cDest1)));
 
-      return directMatch;
+      return directOrReverseMatch;
     }
 
     async function getStopDetail(company, stopId) {
@@ -245,7 +253,7 @@
         combined.forEach(r => {
           if (!r.route || !r.origTc || !r.destTc) return;
           
-          let matchedGroup = routeGroups.find(g => isSameJointRoute(g, r));
+          let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
           
           if (!matchedGroup) {
             matchedGroup = {
@@ -307,12 +315,13 @@
           badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950 mr-1 shadow-sm">城巴</span>`;
         }
 
+        // Single entry per route indicating bi-direction (⇄)
         card.innerHTML = `
           <div class="flex items-center space-x-3">
             <div class="flex items-center">${badgesHtml}</div>
             <span class="text-lg font-bold text-stone-900">${r.route}</span>
           </div>
-          <div class="text-sm text-stone-600 font-medium">${r.origTc} ➔ ${r.destTc}</div>
+          <div class="text-sm text-stone-600 font-medium">${r.origTc} ⇄ ${r.destTc}</div>
         `;
         container.appendChild(card);
       });
