@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Gugubus 菇專用香港巴士實時到站查詢 🍄</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -48,7 +51,7 @@
       
       <!-- Company Filter Pills -->
       <div class="flex flex-wrap gap-1.5 text-xs font-semibold pt-1" id="companyPillGroup">
-        <button onclick="setCompanyFilter('ALL')" class="pill-btn active px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]" data-[#7a4831]="ALL">全部</button>
+        <button onclick="setCompanyFilter('ALL')" class="pill-btn active px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]" data-co="ALL">全部</button>
         <button onclick="setCompanyFilter('KMB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="KMB">九巴</button>
         <button onclick="setCompanyFilter('CTB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="CTB">城巴</button>
         <button onclick="setCompanyFilter('LWB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="LWB">龍運</button>
@@ -61,7 +64,7 @@
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
-      <p class="mt-3 text-stone-600 font-medium">載入菇菇巴士數據中 (九巴 / 城巴 / 龍運 / 嶼巴 / 港鐵巴士)...</p>
+      <p class="mt-3 text-stone-600 font-medium">即時載入菇菇巴士最新數據中...</p>
     </div>
 
     <!-- Route List View -->
@@ -88,6 +91,15 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
+    function fetchFresh(url, options = {}) {
+      const sep = url.includes('?') ? '&' : '?';
+      const freshUrl = `${url}${sep}_t=${Date.now()}`;
+      return fetch(freshUrl, {
+        ...options,
+        cache: 'no-store'
+      });
+    }
+
     function cleanStopName(name) {
       if (!name) return '';
       return name
@@ -97,10 +109,22 @@
         .trim();
     }
 
+    // Dynamic Time-of-Day and Day-of-Week Stop Filter
     function filterCalendarAwareStops(stops, routeNum) {
       const now = new Date();
-      const day = now.getDay();
+      const day = now.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+      const hours = now.getHours();
+      const mins = now.getMinutes();
+      const currentTotalMins = hours * 60 + mins;
+
       const isSunday = (day === 0);
+      const isSaturday = (day === 6);
+      const isWeekday = (day >= 1 && day <= 5);
+      
+      // Morning window (~06:00 to 11:00)
+      const isMorning = (hours >= 6 && hours < 11);
+      // Evening window (~16:00 to 21:00)
+      const isEvening = (hours >= 16 && hours < 21);
 
       const checkName = (s, substring) => {
         const kName = s.kmbName || s.name || '';
@@ -114,26 +138,92 @@
       return stops.filter(s => {
         const kName = s.kmbName || s.name || '';
         const cName = s.ctbName || s.name || '';
+        const fullName = `${kName} ${cName}`;
 
+        // 1. Central Pedestrian Zone (Sundays / Public Holidays)
         if (hasStatueSquare && hasAlexandraOrChaterGarden) {
           if (!isSunday) {
-            if (kName.includes('歷山大廈') || kName.includes('遮打花園') || cName.includes('歷山大廈') || cName.includes('遮打花園')) return false;
+            if (fullName.includes('歷山大廈') || fullName.includes('遮打花園')) return false;
           } else {
-            if (kName.includes('皇后像廣場') || cName.includes('皇后像廣場')) return false;
+            if (fullName.includes('皇后像廣場')) return false;
           }
         }
 
+        // 2. Day-of-Week Restrictions
         if (!isSunday) {
-          if (kName.includes('只限星期日及公眾假期') || cName.includes('只限星期日及公眾假期') ||
-              kName.includes('星期日及公眾假期特別') || cName.includes('星期日及公眾假期特別') ||
-              kName.includes('星期日及假期') || cName.includes('星期日及假期') ||
-              kName.includes('假日特別班') || cName.includes('假日特別班')) {
+          if (fullName.includes('只限星期日及公眾假期') || 
+              fullName.includes('星期日及公眾假期特別') || 
+              fullName.includes('星期日及假期') ||
+              fullName.includes('假日特別班')) {
             return false;
           }
         } else {
-          if (kName.includes('星期日及公眾假期除外') || cName.includes('星期日及公眾假期除外') ||
-              kName.includes('只限星期一至六') || cName.includes('只限星期一至六') ||
-              kName.includes('星期一至六適用') || cName.includes('星期一至六適用')) {
+          if (fullName.includes('星期日及公眾假期除外') || 
+              fullName.includes('星期日除外') ||
+              fullName.includes('公眾假期除外')) {
+            return false;
+          }
+        }
+
+        if (!isWeekday) {
+          if (fullName.includes('只限星期一至五') || 
+              fullName.includes('星期一至五適用') || 
+              fullName.includes('平日特別') || 
+              fullName.includes('平日早晨') ||
+              fullName.includes('平日上午') ||
+              fullName.includes('平日下午')) {
+            return false;
+          }
+        } else {
+          if (fullName.includes('只限星期六及日') ||
+              fullName.includes('只限星期六、日') ||
+              fullName.includes('星期一至五除外')) {
+            return false;
+          }
+        }
+
+        if (!isSaturday) {
+          if (fullName.includes('只限星期六') && !fullName.includes('星期六及')) {
+            return false;
+          }
+        }
+
+        // 3. Time-of-Day Restrictions (Morning Peak vs Evening Peak vs Off-Peak)
+        if (!isMorning) {
+          if (fullName.includes('只限上午') || 
+              fullName.includes('早晨特別') || 
+              fullName.includes('上午班次') || 
+              fullName.includes('早晨時段') ||
+              fullName.includes('上午特別班') ||
+              fullName.includes('早晨班次')) {
+            return false;
+          }
+        }
+
+        if (!isEvening) {
+          if (fullName.includes('只限下午') || 
+              fullName.includes('傍晚特別') || 
+              fullName.includes('下午班次') || 
+              fullName.includes('下午時段') ||
+              fullName.includes('下午特別班') ||
+              fullName.includes('黃昏特別')) {
+            return false;
+          }
+        }
+
+        // 4. Time Window Parser (e.g. "07:30-09:00" or "07:00 - 09:30")
+        const timeRangeRegex = /(\d{1,2}):(\d{2})\s*[-–~至]\s*(\d{1,2}):(\d{2})/;
+        const match = fullName.match(timeRangeRegex);
+        if (match) {
+          const startH = parseInt(match[1], 10);
+          const startM = parseInt(match[2], 10);
+          const endH = parseInt(match[3], 10);
+          const endM = parseInt(match[4], 10);
+
+          const startTotal = startH * 60 + startM;
+          const endTotal = endH * 60 + endM;
+
+          if (currentTotalMins < startTotal || currentTotalMins > endTotal) {
             return false;
           }
         }
@@ -167,7 +257,7 @@
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
         try {
-          const res = await fetch(`${KMB_BASE}/stop/${stopId}`).then(r => r.json());
+          const res = await fetchFresh(`${KMB_BASE}/stop/${stopId}`).then(r => r.json());
           if (res.data) {
             const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
             kmbStopMap.set(stopId, info);
@@ -177,7 +267,7 @@
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
         try {
-          const res = await fetch(`${CTB_BASE}/stop/${stopId}`).then(r => r.json());
+          const res = await fetchFresh(`${CTB_BASE}/stop/${stopId}`).then(r => r.json());
           if (res.data) {
             const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
             ctbStopMap.set(stopId, info);
@@ -225,12 +315,15 @@
 
     async function fetchAllRoutes() {
       showLoading(true);
+      kmbStopMap.clear();
+      ctbStopMap.clear();
+
       try {
         const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
-          fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] })),
-          fetch(`${MTR_BASE}/getRoute`, {
+          fetchFresh(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetchFresh(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetchFresh(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] })),
+          fetchFresh(`${MTR_BASE}/getRoute`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ language: 'zh' })
@@ -265,22 +358,45 @@
             route: r.routeNo ? r.routeNo.trim() : '',
             bound: 'outbound',
             serviceType: '1',
-            origTc: r.origNameTC || nameParts[0]?.trim() || '大嶼山',
-            destTc: r.destNameTC || nameParts[1]?.trim() || '目的地',
+            origTc: r.origNameTC || nameParts[0]?.trim() || '梅窩/東涌',
+            destTc: r.destNameTC || nameParts[1]?.trim() || '昂坪/機場',
             nlbRouteId: r.routeId
           };
         });
 
-        const mtrRoutes = (mtrRes.busRoutes || []).map(r => {
-          const desc = r.routeDescription || '';
+        let rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
+        if (!rawMtr || rawMtr.length === 0) {
+          rawMtr = [
+            { routeName: 'K51', routeDescription: '富泰 ⇄ 掃管笏' },
+            { routeName: 'K51A', routeDescription: '富泰 ⇄ 掃管笏(循環線)' },
+            { routeName: 'K52', routeDescription: '屯門站 ⇄ 龍鼓灘' },
+            { routeName: 'K52A', routeDescription: '屯門站 ⇄ 曾嘴' },
+            { routeName: 'K53', routeDescription: '屯門站 ⇄ 掃管笏(循環線)' },
+            { routeName: 'K54', routeDescription: '和田邨 ⇄ 屯門市中心' },
+            { routeName: 'K58', routeDescription: '富泰 ⇄ 青山灣' },
+            { routeName: 'K65', routeDescription: '元朗東 ⇄ 流浮山' },
+            { routeName: 'K66', routeDescription: '朗屏 ⇄ 大棠' },
+            { routeName: 'K68', routeDescription: '元朗工業邨 ⇄ 華翠園' },
+            { routeName: 'K73', routeDescription: '天恆 ⇄ 元朗西' },
+            { routeName: 'K74', routeDescription: '天水圍市中心 ⇄ 凹頭' },
+            { routeName: 'K75A', routeDescription: '天水圍站 ⇄ 洪水橋' },
+            { routeName: 'K75P', routeDescription: '天瑞 ⇄ 洪水橋' },
+            { routeName: 'K76', routeDescription: '天恆 ⇄ 天水圍站' },
+            { routeName: '506', routeDescription: '屯門碼頭 ⇄ 兆麟' }
+          ];
+        }
+
+        const mtrRoutes = rawMtr.map(r => {
+          const name = r.routeName || r.route || '';
+          const desc = r.routeDescription || r.description || '';
           const parts = desc.split(/[\⇄\-\>]/);
           return {
             company: 'MTRB',
-            route: r.routeName ? r.routeName.trim() : '',
+            route: name.trim(),
             bound: 'outbound',
             serviceType: '1',
             origTc: parts[0]?.trim() || '屯門/元朗',
-            destTc: parts[1]?.trim() || '西鐵站'
+            destTc: parts[1]?.trim() || '港鐵站'
           };
         });
 
@@ -333,7 +449,7 @@
     function setCompanyFilter(co) {
       activeCompanyFilter = co;
       document.querySelectorAll('#companyPillGroup button').forEach(btn => {
-        if (btn.getAttribute('data-co') === co || (co === 'ALL' && !btn.getAttribute('data-co'))) {
+        if (btn.getAttribute('data-co') === co) {
           btn.className = "pill-btn px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]";
         } else {
           btn.className = "pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70";
@@ -460,8 +576,8 @@
       
       try {
         const [outRes, inRes] = await Promise.all([
-          fetch(`${CTB_BASE}/route-stop/CTB/${routeNumber}/outbound`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route-stop/CTB/${routeNumber}/inbound`).then(r => r.json()).catch(() => ({ data: [] }))
+          fetchFresh(`${CTB_BASE}/route-stop/CTB/${routeNumber}/outbound`).then(r => r.json()).catch(() => ({ data: [] })),
+          fetchFresh(`${CTB_BASE}/route-stop/CTB/${routeNumber}/inbound`).then(r => r.json()).catch(() => ({ data: [] }))
         ]);
 
         const outStops = outRes.data || [];
@@ -513,7 +629,7 @@
           const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
           const isOutbound = route.dir === 'outbound';
           const dir = isOutbound ? 'outbound' : 'inbound';
-          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json());
+          const res = await fetchFresh(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json());
           const rawStops = res.data || [];
 
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
@@ -528,7 +644,7 @@
           } else {
             const isOutbound = route.dir === 'outbound';
             const dir = isOutbound ? 'outbound' : 'inbound';
-            const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
+            const res = await fetchFresh(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
             ctbStopsDetailed = await fetchCtbStopDetails(res.data || []);
           }
         }
@@ -546,32 +662,32 @@
           }
 
           if (chosenVariant && chosenVariant.nlbRouteId) {
-            const res = await fetch(`${NLB_BASE}/stop.php?action=getStop&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
+            const res = await fetchFresh(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
             nlbStopsDetailed = (res.stops || []).map((s, idx) => ({
               stopId: s.stopId,
               seq: idx + 1,
-              name: s.stopNameTC || s.stopNameEN,
-              lat: parseFloat(s.latitude),
-              long: parseFloat(s.longitude),
+              name: s.stopNameTC || s.stopNameEN || `車站 ${idx+1}`,
+              lat: parseFloat(s.latitude || 0),
+              long: parseFloat(s.longitude || 0),
               nlbRouteId: chosenVariant.nlbRouteId
             }));
           }
         }
 
         if (route.companies.includes('MTRB')) {
-          const res = await fetch(`${MTR_BASE}/getRouteStops`, {
+          const res = await fetchFresh(`${MTR_BASE}/getRouteStops`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ routeName: route.route, language: 'zh' })
           }).then(r => r.json()).catch(() => ({ stops: [] }));
 
-          const rawStops = res.stops || res.busStop || [];
+          const rawStops = res.stops || res.busStop || res.busStops || [];
           mtrStopsDetailed = rawStops.map((s, idx) => ({
-            stopId: s.stopId,
+            stopId: s.stopId || s.busStopId,
             seq: s.sequence || idx + 1,
-            name: s.stopName || s.busStopNameTC,
-            lat: parseFloat(s.latitude),
-            long: parseFloat(s.longitude)
+            name: s.stopName || s.busStopNameTC || s.nameNameTC || `車站 ${idx+1}`,
+            lat: parseFloat(s.latitude || 0),
+            long: parseFloat(s.longitude || 0)
           }));
         }
 
@@ -599,6 +715,8 @@
         }
 
         finalStops.sort((a, b) => a.seq - b.seq);
+        
+        // Filter stops according to day-of-week and time-of-day availability
         finalStops = filterCalendarAwareStops(finalStops, route.route);
 
         finalStops.forEach((s, idx) => {
@@ -707,7 +825,7 @@
         if (stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           fetchPromises.push(
-            fetch(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
+            fetchFresh(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
               .then(r => r.json())
               .then(res => (res.data || []).map(item => ({ ...item, defaultCo: item.co || 'KMB' })))
               .catch(() => [])
@@ -716,7 +834,7 @@
 
         if (stop.ctbStopId) {
           fetchPromises.push(
-            fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
+            fetchFresh(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
               .then(r => r.json())
               .then(res => (res.data || []).map(item => ({ ...item, defaultCo: 'CTB' })))
               .catch(() => [])
@@ -725,7 +843,7 @@
 
         if (stop.nlbStopId && stop.nlbRouteId) {
           fetchPromises.push(
-            fetch(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}`)
+            fetchFresh(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${stop.nlbRouteId}&stopId=${stop.nlbStopId}`)
               .then(r => r.json())
               .then(res => (res.estimatedArrivals || []).map(item => ({
                 eta: item.estimatedArrivalAt,
@@ -739,19 +857,19 @@
 
         if (stop.mtrStopId) {
           fetchPromises.push(
-            fetch(`${MTR_BASE}/getEstimatedArrival`, {
+            fetchFresh(`${MTR_BASE}/getEstimatedArrival`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ routeName: currentSelectedRoute.route, stopId: stop.mtrStopId, language: 'zh' })
             })
               .then(r => r.json())
               .then(res => {
-                const buses = res.bus || res.busStop?.[0]?.bus || [];
+                const buses = res.bus || res.busStop?.[0]?.bus || res.estimatedArrivals || [];
                 return buses.map(b => ({
-                  eta: b.busArrivalTime || b.arrivalTime || b.busTime,
+                  eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
                   co: 'MTRB',
                   defaultCo: 'MTRB',
-                  rmk_tc: b.remarks || ''
+                  rmk_tc: b.remarks || b.remark || ''
                 }));
               })
               .catch(() => [])
@@ -777,7 +895,7 @@
           })
           .map(item => {
             let etaDate;
-            if (typeof item.eta === 'string' && item.eta.length <= 8) {
+            if (typeof item.eta === 'string' && item.eta.length <= 8 && item.eta.includes(':')) {
               const todayStr = now.toISOString().split('T')[0];
               etaDate = new Date(`${todayStr}T${item.eta}`);
             } else {
@@ -811,7 +929,6 @@
           })
           .filter(item => item !== null);
 
-        // Deduplicate identical ETAs
         const uniqueEtas = [];
         const seen = new Set();
         formattedEtas.forEach(item => {
@@ -822,10 +939,7 @@
           }
         });
 
-        // Strictly sort ALL arrival predictions in chronological order across all operators
         uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
-
-        // Always display the 3 most recent ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
