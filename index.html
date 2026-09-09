@@ -586,7 +586,8 @@
         if (route.companies.includes('NLB')) {
           const nlbVars = route.variants.filter(v => v.company === 'NLB');
           let chosenVariant = nlbVars[0];
-          
+
+          // Dynamic direction switching for NLB route IDs
           if (nlbVars.length > 1) {
             chosenVariant = nlbVars.find(v => {
               const cleanDest = cleanStopName(v.destTc);
@@ -598,7 +599,6 @@
           if (chosenVariant && chosenVariant.nlbRouteId) {
             const res = await fetchFresh(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
             nlbStopsDetailed = (res.stops || []).map((s, idx) => {
-              // Standardizing NLB stop name key resolution across all NLB API variants
               const stopName = s.stopName_tc || s.stopName_c || s.stopNameTC || s.stopName_en || s.stopNameEN || s.stopName || `車站 ${idx+1}`;
               return {
                 stopId: s.stopId,
@@ -788,16 +788,18 @@
         }
 
         if (stop.mtrStopId) {
+          // Correct parameter key: busStopId (NOT stopId)
           fetchPromises.push(
-            fetchFresh(`${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&stopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`)
+            fetchFresh(`${MTR_BASE}/getEstimatedArrival?routeName=${encodeURIComponent(currentSelectedRoute.route)}&busStopId=${encodeURIComponent(stop.mtrStopId)}&language=zh`)
               .then(r => r.json())
               .then(res => {
                 const buses = res.bus || res.busStops?.[0]?.bus || res.busStop?.[0]?.bus || res.estimatedArrivals || [];
                 return buses.map(b => ({
                   eta: b.busArrivalTime || b.arrivalTime || b.time || b.departureTime,
+                  arrivalTimeInSecond: b.arrivalTimeInSecond,
                   co: 'MTRB',
                   defaultCo: 'MTRB',
-                  rmk_tc: b.remarks || b.remark || ''
+                  rmk_tc: b.remarks || b.remark || b.arrivalTimeText || ''
                 }));
               })
               .catch(() => [])
@@ -810,7 +812,7 @@
 
         const formattedEtas = rawEtas
           .filter(item => {
-            if (!item || !item.eta) return false;
+            if (!item || (!item.eta && item.arrivalTimeInSecond === undefined)) return false;
 
             if (item.dest_tc) {
               const destClean = cleanStopName(item.dest_tc);
@@ -823,13 +825,17 @@
           })
           .map(item => {
             let etaDate;
-            if (typeof item.eta === 'string') {
+            
+            // Prefer relative offset if provided by MTR API
+            if (typeof item.arrivalTimeInSecond === 'number') {
+              etaDate = new Date(now.getTime() + item.arrivalTimeInSecond * 1000);
+            } else if (typeof item.eta === 'string') {
               let formattedEtaStr = item.eta.trim();
               if (formattedEtaStr.length <= 8 && formattedEtaStr.includes(':')) {
                 const todayStr = now.toISOString().split('T')[0];
                 etaDate = new Date(`${todayStr}T${formattedEtaStr}`);
               } else {
-                // Converting NLB space-separated datetime string "YYYY-MM-DD HH:mm:ss" -> ISO-8601 "YYYY-MM-DDTHH:mm:ss" for Safari compatibility
+                // Safari ISO sanitization
                 formattedEtaStr = formattedEtaStr.replace(' ', 'T');
                 etaDate = new Date(formattedEtaStr);
               }
