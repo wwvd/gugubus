@@ -8,6 +8,7 @@
 </head>
 <body class="bg-amber-50/50 min-h-screen text-stone-800 font-sans">
 
+  <!-- Header -->
   <header class="bg-[#5c3a21] text-amber-100 p-4 shadow-md sticky top-0 z-50 flex justify-between items-center h-[60px] border-b border-[#472c18]">
     <div class="flex items-center space-x-2">
       <button id="backBtn" class="hidden text-sm bg-[#472c18] hover:bg-[#362111] text-amber-200 px-3 py-1.5 rounded-xl transition border border-amber-900/40 flex items-center space-x-1" onclick="showRouteList()">
@@ -23,6 +24,7 @@
 
   <main class="max-w-3xl mx-auto p-4">
 
+    <!-- Selected Info Banner -->
     <div id="infoCard" class="hidden sticky top-[60px] z-40 bg-[#fdfbf7]/95 backdrop-blur-md p-4 rounded-2xl shadow-md mb-4 border border-amber-200/80 transition-all">
       <div class="flex justify-between items-start mb-1">
         <div id="selectedRouteHeader" class="flex items-center space-x-2"></div>
@@ -36,10 +38,12 @@
       <div id="etaContainer" class="mt-3 flex flex-wrap gap-2"></div>
     </div>
 
+    <!-- Search & Company Filter Section -->
     <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4 space-y-3">
       <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 101, A21, K51, 3M)..." 
         class="w-full px-4 py-2 border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-700 focus:border-amber-700 bg-amber-50/20 placeholder-stone-400">
       
+      <!-- Company Filter Pills -->
       <div class="flex flex-wrap gap-1.5 text-xs font-semibold pt-1" id="companyPillGroup">
         <button onclick="setCompanyFilter('ALL')" class="pill-btn active px-3 py-1.5 rounded-xl transition border bg-[#7a4831] text-amber-50 border-[#633824]" data-co="ALL">全部</button>
         <button onclick="setCompanyFilter('KMB')" class="pill-btn px-3 py-1.5 rounded-xl transition border bg-amber-100/60 text-stone-700 border-amber-200 hover:bg-amber-200/70" data-co="KMB">九巴</button>
@@ -50,13 +54,17 @@
       </div>
     </div>
 
+    <!-- Loading Spinner -->
     <div id="loading" class="flex flex-col items-center justify-center py-12">
       <div class="text-4xl animate-bounce mb-2">🍄</div>
       <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
       <p class="mt-3 text-stone-600 font-medium">實時載入最新路線數據中...</p>
     </div>
 
+    <!-- Route List View -->
     <div id="routeListView" class="space-y-2"></div>
+
+    <!-- Stop List View -->
     <div id="stopListView" class="hidden space-y-2"></div>
 
   </main>
@@ -66,35 +74,6 @@
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
     const NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb";
     const MTR_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus";
-
-    const PROXY_URL = "https://api.allorigins.win/raw?url=";
-
-    const MTR_ROUTES = [
-      { route: '506', origTc: '屯門碼頭', destTc: '兆麟' },
-      { route: 'K12', origTc: '大埔墟站', destTc: '八號花園' },
-      { route: 'K14', origTc: '大埔超級城', destTc: '大埔墟站' },
-      { route: 'K17', origTc: '富善', destTc: '大埔墟站' },
-      { route: 'K18', origTc: '廣福', destTc: '大埔墟站' },
-      { route: 'K51', origTc: '富泰', destTc: '大欖' },
-      { route: 'K51A', origTc: '富泰', destTc: '掃管笏' },
-      { route: 'K52', origTc: '屯門站', destTc: '龍鼓灘' },
-      { route: 'K52A', origTc: '屯門站', destTc: '曾咀' },
-      { route: 'K52P', origTc: '龍鼓灘', destTc: '屯門站' },
-      { route: 'K53', origTc: '屯門站', destTc: '掃管笏' },
-      { route: 'K54', origTc: '和田邨', destTc: '屯門市中心' },
-      { route: 'K58', origTc: '富泰', destTc: '青山灣' },
-      { route: 'K65', origTc: '元朗站', destTc: '流浮山' },
-      { route: 'K65A', origTc: '天水圍站', destTc: '流浮山' },
-      { route: 'K66', origTc: '朗屏', destTc: '大棠黃泥墩村' },
-      { route: 'K68', origTc: '元朗工業邨', destTc: '元朗公園' },
-      { route: 'K73', origTc: '天恒', destTc: '元朗西' },
-      { route: 'K74', origTc: '天水圍', destTc: '凹頭' },
-      { route: 'K75A', origTc: '天水圍站', destTc: '洪水橋' },
-      { route: 'K75P', origTc: '天瑞', destTc: '洪水橋' },
-      { route: 'K75S', origTc: '洪水橋站', destTc: '洪福邨' },
-      { route: 'K76', origTc: '天恒', destTc: '天水圍站' },
-      { route: 'K76S', origTc: '濕地公園路', destTc: '天水圍站' }
-    ];
 
     let allRoutes = [];
     let currentSelectedRoute = null;
@@ -106,23 +85,36 @@
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
 
-    async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await fetch(url, { ...options, signal: controller.signal });
-        clearTimeout(timer);
-        if (!response.ok) return null;
-        return await response.json();
-      } catch (e) {
-        clearTimeout(timer);
-        return null;
-      }
-    }
+    // Fallback Proxy Resolver
+    async function fetchWithProxyFallback(url, options = {}, timeoutMs = 7000) {
+      const fetchAttempt = async (targetUrl) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(targetUrl, { ...options, signal: controller.signal });
+          clearTimeout(timer);
+          if (!res.ok) return null;
+          return await res.json();
+        } catch (e) {
+          clearTimeout(timer);
+          return null;
+        }
+      };
 
-    async function fetchProxy(targetUrl, options = {}) {
-      const proxiedUrl = PROXY_URL + encodeURIComponent(targetUrl);
-      return await fetchWithTimeout(proxiedUrl, options);
+      // 1. Direct Request
+      let data = await fetchAttempt(url);
+      if (data) return data;
+
+      // 2. Proxy Fallback A: corsproxy.io
+      data = await fetchAttempt(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+      if (data) return data;
+
+      // 3. Proxy Fallback B: allorigins
+      const rawAllOrigins = await fetchAttempt(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+      if (rawAllOrigins) return rawAllOrigins;
+
+      // 4. Proxy Fallback C: thingproxy
+      return await fetchAttempt(`https://thingproxy.freeboard.io/fetch/${url}`);
     }
 
     function cleanStopName(name) {
@@ -175,7 +167,7 @@
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        const res = await fetchWithTimeout(`${KMB_BASE}/stop/${stopId}`);
+        const res = await fetchWithProxyFallback(`${KMB_BASE}/stop/${stopId}`);
         if (res && res.data) {
           const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
           kmbStopMap.set(stopId, info);
@@ -183,7 +175,7 @@
         }
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        const res = await fetchWithTimeout(`${CTB_BASE}/stop/${stopId}`);
+        const res = await fetchWithProxyFallback(`${CTB_BASE}/stop/${stopId}`);
         if (res && res.data) {
           const info = { name: res.data.name_tc || res.data.name_en, lat: parseFloat(res.data.lat), long: parseFloat(res.data.long) };
           ctbStopMap.set(stopId, info);
@@ -201,10 +193,15 @@
       ctbStopMap.clear();
 
       try {
-        const [kmbRes, ctbRes, nlbRes] = await Promise.all([
-          fetchWithTimeout(`${KMB_BASE}/route`),
-          fetchWithTimeout(`${CTB_BASE}/route/CTB`),
-          fetchProxy(`${NLB_BASE}/route.php?action=list`)
+        const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
+          fetchWithProxyFallback(`${KMB_BASE}/route`),
+          fetchWithProxyFallback(`${CTB_BASE}/route/CTB`),
+          fetchWithProxyFallback(`${NLB_BASE}/route.php?action=list`),
+          fetchWithProxyFallback(`${MTR_BASE}/getRoute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ language: 'zh' })
+          })
         ]);
 
         const kmbRoutes = ((kmbRes && kmbRes.data) || []).map(r => {
@@ -243,20 +240,27 @@
           };
         });
 
-        const mtrRoutes = MTR_ROUTES.map(r => ({
-          company: 'MTRB',
-          route: r.route,
-          bound: 'outbound',
-          serviceType: '1',
-          origTc: r.origTc,
-          destTc: r.destTc
-        }));
+        const rawMtr = (mtrRes && (mtrRes.busRoutes || mtrRes.routes || mtrRes.bus)) || [];
+        const mtrRoutes = rawMtr.map(r => {
+          const name = String(r.routeName || r.route || '').trim();
+          const desc = r.routeNameZh || r.routeDescription || r.description || '';
+          const parsed = parseEndpoints(desc);
+          return {
+            company: 'MTRB',
+            route: name,
+            bound: 'outbound',
+            serviceType: '1',
+            origTc: parsed.orig || name,
+            destTc: parsed.dest || name
+          };
+        });
 
         const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes, ...mtrRoutes];
         const routeGroups = [];
 
         combined.forEach(r => {
           if (!r.route) return;
+          
           let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
           if (!matchedGroup) {
             matchedGroup = {
@@ -268,6 +272,7 @@
             };
             routeGroups.push(matchedGroup);
           }
+          
           matchedGroup.companies.add(r.company);
           const isDuplicateVariant = matchedGroup.variants.some(v => 
             v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType && v.nlbRouteId === r.nlbRouteId
@@ -430,7 +435,7 @@
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
           const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
-          const res = await fetchWithTimeout(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`);
+          const res = await fetchWithProxyFallback(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`);
           const rawStops = (res && res.data) || [];
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             const info = await getStopDetail('KMB', s.stop);
@@ -440,7 +445,7 @@
 
         if (route.companies.includes('CTB')) {
           const dir = route.dir === 'outbound' ? 'outbound' : 'inbound';
-          const res = await fetchWithTimeout(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`);
+          const res = await fetchWithProxyFallback(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`);
           const rawStops = (res && res.data) || [];
           ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
@@ -451,7 +456,7 @@
         if (route.companies.includes('NLB')) {
           const chosenVariant = getActiveNlbVariant(route);
           if (chosenVariant && chosenVariant.nlbRouteId) {
-            const res = await fetchProxy(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`);
+            const res = await fetchWithProxyFallback(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`);
             const rawStops = (res && (res.stops || res.data)) || [];
             nlbStopsDetailed = rawStops.map((s, idx) => ({
               stopId: String(s.stopId || s.stop_id || s.id || ''),
@@ -463,7 +468,7 @@
         }
 
         if (route.companies.includes('MTRB')) {
-          const res = await fetchProxy(`${MTR_BASE}/getSchedule`, {
+          const res = await fetchWithProxyFallback(`${MTR_BASE}/getSchedule`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ language: 'zh', routeName: route.route })
@@ -559,21 +564,21 @@
         if (stop.kmbStopId) {
           const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || { serviceType: '1' };
           fetchPromises.push(
-            fetchWithTimeout(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
+            fetchWithProxyFallback(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: item.co || 'KMB' })))
           );
         }
 
         if (stop.ctbStopId) {
           fetchPromises.push(
-            fetchWithTimeout(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
+            fetchWithProxyFallback(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
           );
         }
 
         if (stop.nlbStopId && stop.nlbRouteId) {
           fetchPromises.push(
-            fetchProxy(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${encodeURIComponent(stop.nlbRouteId)}&stopId=${encodeURIComponent(stop.nlbStopId)}&language=zh`)
+            fetchWithProxyFallback(`${NLB_BASE}/stop.php?action=estimatedArrivals&routeId=${encodeURIComponent(stop.nlbRouteId)}&stopId=${encodeURIComponent(stop.nlbStopId)}&language=zh`)
               .then(res => ((res && (res.estimatedArrivals || res.data)) || []).map(item => ({
                 eta: item.estimatedArrivalAt || item.estimatedArrival || item.estimatedArrivalAtC,
                 co: 'NLB',
@@ -585,7 +590,7 @@
 
         if (stop.mtrStopId) {
           fetchPromises.push(
-            fetchProxy(`${MTR_BASE}/getSchedule`, {
+            fetchWithProxyFallback(`${MTR_BASE}/getSchedule`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ language: 'zh', routeName: currentSelectedRoute.route })
