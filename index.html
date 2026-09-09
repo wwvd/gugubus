@@ -87,7 +87,7 @@
 
     function cleanStopName(name) {
       if (!name) return '';
-      return name
+      return String(name)
         .replace(/（.*?）|\(.*?\)|【.*?】/g, '')
         .replace(/巴士總站|總站|分站|車站|特別班次|循環線|轉乘站|市中心|廣場|大廈|商場|碼頭|邨|屋邨|公園|花園|鐵路站|港鐵站/g, '')
         .replace(/[，, \-_]/g, '')
@@ -109,23 +109,6 @@
       return { orig: clean, dest: clean };
     }
 
-    function matchNlbVariant(nlbVars, selectedOrig, selectedDest) {
-      if (!nlbVars || nlbVars.length === 0) return null;
-      if (nlbVars.length === 1) return nlbVars[0];
-
-      const sOrig = cleanStopName(selectedOrig);
-      const sDest = cleanStopName(selectedDest);
-
-      const matched = nlbVars.find(v => {
-        const vOrig = cleanStopName(v.origTc);
-        const vDest = cleanStopName(v.destTc);
-        return (vOrig.includes(sOrig) || sOrig.includes(vOrig)) &&
-               (vDest.includes(sDest) || sDest.includes(vDest));
-      });
-
-      return matched || nlbVars[0];
-    }
-
     function filterCalendarAwareStops(stops, routeNum) {
       const now = new Date();
       const day = now.getDay();
@@ -136,7 +119,6 @@
       const isSunday = (day === 0);
       const isSaturday = (day === 6);
       const isWeekday = (day >= 1 && day <= 5);
-      
       const isMorning = (hours >= 6 && hours < 11);
       const isEvening = (hours >= 16 && hours < 21);
 
@@ -175,9 +157,7 @@
         }
 
         if (!isSaturday && fullName.includes('只限星期六') && !fullName.includes('星期六及')) return false;
-
         if (!isMorning && (fullName.includes('只限上午') || fullName.includes('早晨特別') || fullName.includes('上午班次') || fullName.includes('早晨時段') || fullName.includes('上午特別班') || fullName.includes('早晨班次'))) return false;
-
         if (!isEvening && (fullName.includes('只限下午') || fullName.includes('傍晚特別') || fullName.includes('下午班次') || fullName.includes('下午時段') || fullName.includes('下午特別班') || fullName.includes('黃昏特別'))) return false;
 
         const timeRangeRegex = /(\d{1,2}):(\d{2})\s*[-–~至]\s*(\d{1,2}):(\d{2})/;
@@ -276,109 +256,110 @@
       kmbStopMap.clear();
       ctbStopMap.clear();
 
-      try {
-        const [kmbRes, ctbRes, nlbRes, mtrRes] = await Promise.all([
-          fetch(`${KMB_BASE}/route`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()).catch(() => ({ routes: [] })),
-          fetch(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json()).catch(() => ({ busRoutes: [] }))
-        ]);
+      // Safely fetch all 4 providers independently
+      const results = await Promise.allSettled([
+        fetch(`${KMB_BASE}/route`).then(r => r.json()),
+        fetch(`${CTB_BASE}/route/CTB`).then(r => r.json()),
+        fetch(`${NLB_BASE}/route.php?action=list`).then(r => r.json()),
+        fetch(`${MTR_BASE}/getRoute?language=zh`).then(r => r.json())
+      ]);
 
-        const kmbRoutes = (kmbRes.data || []).map(r => {
-          const isLwb = (r.route && (r.route.startsWith('A') || r.route.startsWith('E') || r.route.startsWith('N') || r.route.startsWith('R') || r.route.startsWith('S'))) && !['101','102','112'].includes(r.route);
-          return {
-            company: isLwb ? 'LWB' : 'KMB',
-            route: r.route ? r.route.trim() : '',
-            bound: r.bound,
-            serviceType: r.service_type || '1',
-            origTc: r.orig_tc,
-            destTc: r.dest_tc
-          };
-        });
+      const kmbRes = results[0].status === 'fulfilled' ? results[0].value : {};
+      const ctbRes = results[1].status === 'fulfilled' ? results[1].value : {};
+      const nlbRes = results[2].status === 'fulfilled' ? results[2].value : {};
+      const mtrRes = results[3].status === 'fulfilled' ? results[3].value : {};
 
-        const ctbRoutes = (ctbRes.data || []).map(r => ({
-          company: 'CTB',
+      const kmbRoutes = (kmbRes.data || []).map(r => {
+        const isLwb = (r.route && (r.route.startsWith('A') || r.route.startsWith('E') || r.route.startsWith('N') || r.route.startsWith('R') || r.route.startsWith('S'))) && !['101','102','112'].includes(r.route);
+        return {
+          company: isLwb ? 'LWB' : 'KMB',
           route: r.route ? r.route.trim() : '',
-          bound: r.bound || 'outbound',
-          serviceType: '1',
+          bound: r.bound,
+          serviceType: r.service_type || '1',
           origTc: r.orig_tc,
           destTc: r.dest_tc
-        }));
+        };
+      });
 
-        const rawNlb = nlbRes.routes || nlbRes.data || [];
-        const nlbRoutes = rawNlb.map(r => {
-          const title = r.routeNameC || r.routeNameS || r.routeNameE || '';
-          const parsed = parseEndpoints(title);
-          return {
-            company: 'NLB',
-            route: String(r.routeNo || '').trim(),
-            bound: 'outbound',
-            serviceType: '1',
-            origTc: parsed.orig || '嶼巴起點',
-            destTc: parsed.dest || '嶼巴終點',
-            nlbRouteId: String(r.routeId || '')
+      const ctbRoutes = (ctbRes.data || []).map(r => ({
+        company: 'CTB',
+        route: r.route ? r.route.trim() : '',
+        bound: r.bound || 'outbound',
+        serviceType: '1',
+        origTc: r.orig_tc,
+        destTc: r.dest_tc
+      }));
+
+      const rawNlb = nlbRes.routes || nlbRes.data || [];
+      const nlbRoutes = rawNlb.map(r => {
+        const title = r.routeNameC || r.routeNameS || r.routeNameE || '';
+        const parsed = parseEndpoints(title);
+        return {
+          company: 'NLB',
+          route: String(r.routeNo || '').trim(),
+          bound: 'outbound',
+          serviceType: '1',
+          origTc: parsed.orig || '起點',
+          destTc: parsed.dest || '終點',
+          nlbRouteId: String(r.routeId || '')
+        };
+      });
+
+      const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
+      const mtrRoutes = rawMtr.map(r => {
+        const name = String(r.routeName || r.route || '').trim();
+        const desc = r.routeNameZh || r.routeDescription || r.description || '';
+        const parsed = parseEndpoints(desc);
+        return {
+          company: 'MTRB',
+          route: name,
+          bound: 'outbound',
+          serviceType: '1',
+          origTc: parsed.orig || name,
+          destTc: parsed.dest || name
+        };
+      });
+
+      const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes, ...mtrRoutes];
+      const routeGroups = [];
+
+      combined.forEach(r => {
+        if (!r.route) return;
+        
+        let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
+        
+        if (!matchedGroup) {
+          matchedGroup = {
+            route: r.route,
+            companies: new Set(),
+            variants: [],
+            origTc: r.origTc || r.route,
+            destTc: r.destTc || r.route
           };
-        });
+          routeGroups.push(matchedGroup);
+        }
+        
+        matchedGroup.companies.add(r.company);
+        
+        const isDuplicateVariant = matchedGroup.variants.some(v => 
+          v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType && v.nlbRouteId === r.nlbRouteId
+        );
+        if (!isDuplicateVariant) {
+          matchedGroup.variants.push(r);
+        }
+      });
 
-        const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || [];
-        const mtrRoutes = rawMtr.map(r => {
-          const name = String(r.routeName || r.route || '').trim();
-          const desc = r.routeNameZh || r.routeDescription || r.description || '';
-          const parsed = parseEndpoints(desc);
-          return {
-            company: 'MTRB',
-            route: name,
-            bound: 'outbound',
-            serviceType: '1',
-            origTc: parsed.orig || name,
-            destTc: parsed.dest || name
-          };
-        });
+      allRoutes = routeGroups.map(g => ({
+        route: g.route,
+        companies: Array.from(g.companies),
+        variants: g.variants,
+        origTc: g.origTc,
+        destTc: g.destTc
+      }));
 
-        const combined = [...kmbRoutes, ...ctbRoutes, ...nlbRoutes, ...mtrRoutes];
-        const routeGroups = [];
-
-        combined.forEach(r => {
-          if (!r.route) return;
-          
-          let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
-          
-          if (!matchedGroup) {
-            matchedGroup = {
-              route: r.route,
-              companies: new Set(),
-              variants: [],
-              origTc: r.origTc || r.route,
-              destTc: r.destTc || r.route
-            };
-            routeGroups.push(matchedGroup);
-          }
-          
-          matchedGroup.companies.add(r.company);
-          
-          const isDuplicateVariant = matchedGroup.variants.some(v => 
-            v.company === r.company && v.bound === r.bound && v.serviceType === r.serviceType && v.nlbRouteId === r.nlbRouteId
-          );
-          if (!isDuplicateVariant) {
-            matchedGroup.variants.push(r);
-          }
-        });
-
-        allRoutes = routeGroups.map(g => ({
-          route: g.route,
-          companies: Array.from(g.companies),
-          variants: g.variants,
-          origTc: g.origTc,
-          destTc: g.destTc
-        }));
-
-        allRoutes.sort((a, b) => a.route.localeCompare(b.route, undefined, { numeric: true, sensitivity: 'base' }));
-        renderRoutes(allRoutes);
-      } catch (err) {
-        alert("無法讀取即時巴士路線資料，請檢查網路連線。");
-      } finally {
-        showLoading(false);
-      }
+      allRoutes.sort((a, b) => a.route.localeCompare(b.route, undefined, { numeric: true, sensitivity: 'base' }));
+      renderRoutes(allRoutes);
+      showLoading(false);
     }
 
     function setCompanyFilter(co) {
@@ -564,7 +545,7 @@
           const kmbVar = route.variants.find(v => v.company === 'KMB' || v.company === 'LWB') || {};
           const isOutbound = route.dir === 'outbound';
           const dir = isOutbound ? 'outbound' : 'inbound';
-          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json());
+          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json()).catch(() => ({}));
           const rawStops = res.data || [];
 
           kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
@@ -579,14 +560,22 @@
           } else {
             const isOutbound = route.dir === 'outbound';
             const dir = isOutbound ? 'outbound' : 'inbound';
-            const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
+            const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json()).catch(() => ({}));
             ctbStopsDetailed = await fetchCtbStopDetails(res.data || []);
           }
         }
 
         if (route.companies.includes('NLB')) {
           const nlbVars = route.variants.filter(v => v.company === 'NLB');
-          const chosenVariant = matchNlbVariant(nlbVars, route.origTc, route.destTc);
+          const sOrig = cleanStopName(route.origTc);
+          const sDest = cleanStopName(route.destTc);
+
+          let chosenVariant = nlbVars.find(v => {
+            const vOrig = cleanStopName(v.origTc);
+            const vDest = cleanStopName(v.destTc);
+            return (vOrig.includes(sOrig) || sOrig.includes(vOrig)) &&
+                   (vDest.includes(sDest) || sDest.includes(vDest));
+          }) || nlbVars[0];
 
           if (chosenVariant && chosenVariant.nlbRouteId) {
             const res = await fetch(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
