@@ -73,7 +73,6 @@
         .trim();
     }
 
-    // Check if two route entries belong to the same joint route
     function isSameJointRoute(r1, r2) {
       if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
       
@@ -438,7 +437,7 @@
         });
 
         uniqueEtas.sort((a, b) => a.mins - b.mins);
-        const nextETAs = uniqueEtas.slice(0, 4);
+        const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
 
