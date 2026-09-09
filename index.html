@@ -63,7 +63,6 @@
 
     let allRoutes = [];
     let currentSelectedRoute = null;
-    let currentSelectedStop = null;
 
     function normalizeTerminus(name) {
       if (!name) return '';
@@ -112,7 +111,6 @@
           const origClean = normalizeTerminus(r.origTc);
           const destClean = normalizeTerminus(r.destTc);
           const sortedEnds = [origClean, destClean].sort().join('__');
-          
           const mapKey = `${routeNum}:::${sortedEnds}`;
 
           if (!routeMap.has(mapKey)) {
@@ -204,12 +202,12 @@
         companies: mergedRoute.companies,
         primaryCompany: primaryCompany,
         bound: primaryVariant.bound,
-        serviceType: primaryVariant.serviceType,
+        serviceType: primaryVariant.serviceType || '1',
         origTc: primaryVariant.origTc,
         destTc: primaryVariant.destTc,
-        variants: mergedRoute.variants
+        variants: mergedRoute.variants,
+        dir: (primaryVariant.bound === 'O' || primaryVariant.bound.toLowerCase() === 'outbound') ? 'outbound' : 'inbound'
       };
-      currentSelectedStop = null;
 
       document.getElementById('routeListView').classList.add('hidden');
       document.getElementById('searchSection').classList.add('hidden');
@@ -250,21 +248,8 @@
       currentSelectedRoute.origTc = currentSelectedRoute.destTc;
       currentSelectedRoute.destTc = temp;
 
-      const currentBound = currentSelectedRoute.bound.toLowerCase();
-      const isOutbound = currentBound === 'o' || currentBound === 'outbound';
+      currentSelectedRoute.dir = currentSelectedRoute.dir === 'outbound' ? 'inbound' : 'outbound';
 
-      const primaryVariants = currentSelectedRoute.variants.filter(v => v.company === currentSelectedRoute.primaryCompany);
-      const targetVariant = primaryVariants.find(v => {
-        const vBound = v.bound.toLowerCase();
-        return (vBound === 'o' || vBound === 'outbound') !== isOutbound;
-      }) || primaryVariants[0];
-
-      if (targetVariant) {
-        currentSelectedRoute.bound = targetVariant.bound;
-        currentSelectedRoute.serviceType = targetVariant.serviceType || '1';
-      }
-
-      currentSelectedStop = null;
       document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
       document.getElementById('selectedStopInfo').textContent = "請選擇下方車站";
       document.getElementById('etaContainer').innerHTML = "";
@@ -277,66 +262,35 @@
 
       try {
         const route = currentSelectedRoute;
-        const isJoint = route.companies.length > 1;
+        let stopsDetailed = [];
 
-        // Fetch KMB stops
-        let kmbStopsDetailed = [];
-        if (route.companies.includes('KMB')) {
-          const kmbVar = route.variants.find(v => v.company === 'KMB') || {};
-          const isOutbound = (route.primaryCompany === 'KMB' ? route.bound : (kmbVar.bound || 'O')).toUpperCase() === 'O';
-          const dir = isOutbound ? 'outbound' : 'inbound';
-          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json());
-          const kmbRawStops = res.data || [];
+        if (route.primaryCompany === 'KMB') {
+          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${route.dir}/${route.serviceType}`).then(r => r.json());
+          const rawStops = res.data || [];
 
-          kmbStopsDetailed = await Promise.all(kmbRawStops.map(async (s) => {
+          stopsDetailed = await Promise.all(rawStops.map(async (s) => {
             let name = `巴士站 ${s.seq}`;
             try {
               const stopRes = await fetch(`${KMB_BASE}/stop/${s.stop}`).then(r => r.json());
               name = stopRes.data?.name_tc || name;
             } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name };
+            return { stopId: s.stop, seq: s.seq, name, company: 'KMB' };
           }));
-        }
+        } else {
+          const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${route.dir}`).then(r => r.json());
+          const rawStops = res.data || [];
 
-        // Fetch CTB stops
-        let ctbStopsDetailed = [];
-        if (route.companies.includes('CTB')) {
-          const ctbVar = route.variants.find(v => v.company === 'CTB') || {};
-          const isOutbound = (route.primaryCompany === 'CTB' ? route.bound : (ctbVar.bound || 'outbound')).toLowerCase() === 'outbound';
-          const dir = isOutbound ? 'outbound' : 'inbound';
-          const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
-          const ctbRawStops = res.data || [];
-
-          ctbStopsDetailed = await Promise.all(ctbRawStops.map(async (s) => {
+          stopsDetailed = await Promise.all(rawStops.map(async (s) => {
             let name = `巴士站 ${s.seq}`;
             try {
               const stopRes = await fetch(`${CTB_BASE}/stop/${s.stop}`).then(r => r.json());
               name = stopRes.data?.name_tc || name;
             } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name };
+            return { stopId: s.stop, seq: s.seq, name, company: 'CTB' };
           }));
         }
 
-        // Merge stops by matching stop names for joint routes
-        let finalStops = [];
-        if (isJoint && kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map((kStop, index) => {
-            const kNorm = normalizeTerminus(kStop.name);
-            const matchedCtb = ctbStopsDetailed.find(cStop => normalizeTerminus(cStop.name) === kNorm) || ctbStopsDetailed[index];
-            return {
-              seq: kStop.seq,
-              name: kStop.name,
-              kmbStopId: kStop.stopId,
-              ctbStopId: matchedCtb ? matchedCtb.stopId : null
-            };
-          });
-        } else if (kmbStopsDetailed.length > 0) {
-          finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId, ctbStopId: null }));
-        } else {
-          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: null, ctbStopId: s.stopId }));
-        }
-
-        renderStops(finalStops.sort((a, b) => a.seq - b.seq));
+        renderStops(stopsDetailed.sort((a, b) => a.seq - b.seq));
       } catch (err) {
         alert("無法加載車站列表。");
       } finally {
@@ -365,8 +319,6 @@
     }
 
     async function fetchETA(stop, activeCard) {
-      currentSelectedStop = stop;
-
       document.querySelectorAll('#stopListView > div').forEach(el => el.classList.remove('border-blue-500', 'bg-blue-50'));
       if (activeCard) activeCard.classList.add('border-blue-500', 'bg-blue-50');
 
@@ -375,31 +327,18 @@
       etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
 
       try {
-        let fetchPromises = [];
-
-        if (stop.kmbStopId) {
-          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB') || { serviceType: '1' };
-          fetchPromises.push(
-            fetch(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
-              .then(r => r.json())
-              .then(res => (res.data || []).map(item => ({ ...item, co: 'KMB' })))
-              .catch(() => [])
-          );
+        let etaUrl = "";
+        if (stop.company === 'KMB') {
+          etaUrl = `${KMB_BASE}/eta/${stop.stopId}/${currentSelectedRoute.route}/${currentSelectedRoute.serviceType}`;
+        } else {
+          etaUrl = `${CTB_BASE}/eta/CTB/${stop.stopId}/${currentSelectedRoute.route}`;
         }
 
-        if (stop.ctbStopId) {
-          fetchPromises.push(
-            fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
-              .then(r => r.json())
-              .then(res => (res.data || []).map(item => ({ ...item, co: 'CTB' })))
-              .catch(() => [])
-          );
-        }
-
-        const results = await Promise.all(fetchPromises);
+        const res = await fetch(etaUrl).then(r => r.json());
+        const rawEtas = res.data || [];
         const now = new Date();
 
-        const allEtas = results.flat()
+        const formattedEtas = rawEtas
           .filter(item => item && item.eta)
           .map(item => {
             const etaDate = new Date(item.eta);
@@ -408,21 +347,24 @@
 
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
+
+            const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : stop.company;
+
             return {
-              company: item.co,
+              company: co,
               mins: diffMin,
               exactTime: `${hh}:${mm}`
             };
           })
           .filter(item => item !== null);
 
-        // Deduplicate identical ETAs
+        // Deduplicate ETAs
         const uniqueEtas = [];
-        const seenKeys = new Set();
-        allEtas.forEach(item => {
+        const seen = new Set();
+        formattedEtas.forEach(item => {
           const key = `${item.company}-${item.exactTime}-${item.mins}`;
-          if (!seenKeys.has(key)) {
-            seenKeys.add(key);
+          if (!seen.has(key)) {
+            seen.add(key);
             uniqueEtas.push(item);
           }
         });
