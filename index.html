@@ -111,20 +111,20 @@
       return /^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d|X1\d\d|R3\d\d|R6\d\d|[13689]\d\d[A-Z]?|N[13689]\d\d[A-Z]?)$/i.test(norm);
     }
 
-    function isSameRouteGroup(r1, r2) {
-      if (!r1?.route || !r2?.route) return false;
-      if (r1.route.toUpperCase() !== r2.route.toUpperCase()) return false;
-      
-      // Same operator and same route number -> Group together
-      if (r1.company === r2.company) return true;
+    function canGroupWith(group, r) {
+      if (!group || !r || !r.route) return false;
+      if (group.route.toUpperCase() !== r.route.toUpperCase()) return false;
 
-      // Different operators with same route number -> ONLY group if it is a Joint Cross-Harbour Route AND origins/destinations match
-      if (!isJointRouteNumber(r1.route)) return false;
+      // 1. Same company for the same route number -> Always group together
+      if (group.companies.has(r.company)) return true;
 
-      const cOrig1 = cleanStopName(r1.origTc);
-      const cDest1 = cleanStopName(r1.destTc);
-      const cOrig2 = cleanStopName(r2.origTc);
-      const cDest2 = cleanStopName(r2.destTc);
+      // 2. Different companies -> ONLY group if it's a joint cross-harbour route
+      if (!isJointRouteNumber(r.route)) return false;
+
+      const cOrig1 = cleanStopName(group.origTc);
+      const cDest1 = cleanStopName(group.destTc);
+      const cOrig2 = cleanStopName(r.origTc);
+      const cDest2 = cleanStopName(r.destTc);
 
       const origMatch = (cOrig1 && cOrig2 && (cOrig1.includes(cOrig2) || cOrig2.includes(cOrig1)));
       const destMatch = (cDest1 && cDest2 && (cDest1.includes(cDest2) || cDest2.includes(cDest2)));
@@ -194,7 +194,7 @@
 
         combined.forEach(r => {
           if (!r.route) return;
-          let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
+          let matchedGroup = routeGroups.find(g => canGroupWith(g, r));
           if (!matchedGroup) {
             matchedGroup = {
               route: r.route,
