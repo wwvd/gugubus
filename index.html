@@ -3,50 +3,55 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gugubus 菇專用香港巴士實時到站查詢</title>
+  <title>Gugubus 菇專用香港巴士實時到站查詢 🍄</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100 min-h-screen text-gray-800 font-sans">
+<body class="bg-amber-50/50 min-h-screen text-stone-800 font-sans">
 
   <!-- Header -->
-  <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-50 flex justify-between items-center h-[60px]">
+  <header class="bg-[#5c3a21] text-amber-100 p-4 shadow-md sticky top-0 z-50 flex justify-between items-center h-[60px] border-b border-[#472c18]">
     <div class="flex items-center space-x-2">
-      <button id="backBtn" class="hidden text-sm bg-blue-700 hover:bg-blue-800 px-3 py-1.5 rounded-lg transition" onclick="showRouteList()">
-        ← 返回路線
+      <button id="backBtn" class="hidden text-sm bg-[#472c18] hover:bg-[#362111] text-amber-200 px-3 py-1.5 rounded-xl transition border border-amber-900/40 flex items-center space-x-1" onclick="showRouteList()">
+        <span>←</span>
+        <span>返回路線</span>
       </button>
-      <h1 class="text-xl font-bold" id="appTitle">Gugubus 菇專用香港巴士實時到站查詢</h1>
+      <h1 class="text-xl font-bold flex items-center space-x-2" id="appTitle">
+        <span>🍄</span>
+        <span>Gugubus 菇專用香港巴士實時到站查詢</span>
+      </h1>
     </div>
   </header>
 
   <main class="max-w-3xl mx-auto p-4">
 
     <!-- Selected Info Banner (Sticky at top when scrolling stops) -->
-    <div id="infoCard" class="hidden sticky top-[60px] z-40 bg-white/95 backdrop-blur-md p-4 rounded-xl shadow-md mb-4 border border-gray-200 transition-all">
+    <div id="infoCard" class="hidden sticky top-[60px] z-40 bg-[#fdfbf7]/95 backdrop-blur-md p-4 rounded-2xl shadow-md mb-4 border border-amber-200/80 transition-all">
       <div class="flex justify-between items-start mb-1">
         <div id="selectedRouteHeader" class="flex items-center space-x-2"></div>
         <!-- Direction Switch Button -->
-        <button id="switchDirBtn" onclick="toggleDirection()" class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1.5 rounded-lg font-semibold transition flex items-center space-x-1">
+        <button id="switchDirBtn" onclick="toggleDirection()" class="text-xs bg-amber-100/80 hover:bg-amber-200/80 text-amber-900 border border-amber-300 px-3 py-1.5 rounded-xl font-semibold transition flex items-center space-x-1 shadow-sm">
           <span>切換方向</span>
           <span>⇄</span>
         </button>
       </div>
-      <div id="selectedRouteDir" class="text-sm text-gray-600 mb-3"></div>
-      <div id="selectedStopInfo" class="text-md font-semibold text-gray-800 border-t pt-2">請選擇下方車站</div>
+      <div id="selectedRouteDir" class="text-sm text-stone-600 mb-3"></div>
+      <div id="selectedStopInfo" class="text-md font-semibold text-stone-800 border-t border-amber-200/60 pt-2">請選擇下方車站</div>
       
       <!-- ETA Badges Container -->
       <div id="etaContainer" class="mt-3 flex flex-wrap gap-2"></div>
     </div>
 
     <!-- Search Section (Route View Only) -->
-    <div id="searchSection" class="bg-white p-4 rounded-xl shadow-md mb-4">
+    <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4">
       <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 101, 102, 112, 960)..." 
-        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        class="w-full px-4 py-2 border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-700 focus:border-amber-700 bg-amber-50/20 placeholder-stone-400">
     </div>
 
     <!-- Loading Spinner -->
     <div id="loading" class="flex flex-col items-center justify-center py-12">
-      <div class="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-      <p class="mt-3 text-gray-500 font-medium">載入數據中...</p>
+      <div class="text-4xl animate-bounce mb-2">🍄</div>
+      <div class="w-10 h-10 border-4 border-amber-700 border-t-transparent rounded-full animate-spin"></div>
+      <p class="mt-3 text-stone-600 font-medium">載入菇菇巴士數據中...</p>
     </div>
 
     <!-- Route List View -->
@@ -99,7 +104,6 @@
       let bestMatch = null;
       let minDistance = Infinity;
 
-      // 1. Try GPS coordinate matching (within ~200 meters)
       if (kStop.lat && kStop.long) {
         ctbStops.forEach(cStop => {
           if (cStop.lat && cStop.long) {
@@ -116,7 +120,6 @@
 
       if (bestMatch) return bestMatch;
 
-      // 2. Fallback to name similarity matching
       const kNorm = cleanStopName(kStop.name);
       if (kNorm.length >= 2) {
         bestMatch = ctbStops.find(cStop => {
@@ -207,29 +210,29 @@
       container.innerHTML = '';
 
       if (routes.length === 0) {
-        container.innerHTML = `<div class="text-center py-8 text-gray-500">找不到相關路線</div>`;
+        container.innerHTML = `<div class="text-center py-8 text-stone-500">找不到相關路線 🍄</div>`;
         return;
       }
 
       routes.forEach(r => {
         const card = document.createElement('div');
-        card.className = "bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition cursor-pointer flex justify-between items-center";
+        card.className = "bg-white p-4 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 hover:shadow-md transition cursor-pointer flex justify-between items-center";
         card.onclick = () => selectRoute(r);
 
         let badgesHtml = '';
         if (r.companies.includes('KMB')) {
-          badgesHtml += `<span class="px-2 py-1 rounded font-bold text-xs bg-red-600 text-white mr-1">九巴</span>`;
+          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white mr-1 shadow-sm">九巴</span>`;
         }
         if (r.companies.includes('CTB')) {
-          badgesHtml += `<span class="px-2 py-1 rounded font-bold text-xs bg-yellow-400 text-black">城巴</span>`;
+          badgesHtml += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950 mr-1 shadow-sm">城巴</span>`;
         }
 
         card.innerHTML = `
           <div class="flex items-center space-x-3">
             <div class="flex items-center">${badgesHtml}</div>
-            <span class="text-lg font-bold text-gray-900">${r.route}</span>
+            <span class="text-lg font-bold text-stone-900">${r.route}</span>
           </div>
-          <div class="text-sm text-gray-600">${r.origTc} ➔ ${r.destTc}</div>
+          <div class="text-sm text-stone-600 font-medium">${r.origTc} ➔ ${r.destTc}</div>
         `;
         container.appendChild(card);
       });
@@ -260,7 +263,7 @@
       document.getElementById('routeListView').classList.add('hidden');
       document.getElementById('searchSection').classList.add('hidden');
       document.getElementById('backBtn').classList.remove('hidden');
-      document.getElementById('appTitle').textContent = `路線 ${currentSelectedRoute.route} 車站列表`;
+      document.getElementById('appTitle').innerHTML = `<span>🍄</span><span>路線 ${currentSelectedRoute.route} 車站列表</span>`;
 
       document.getElementById('infoCard').classList.remove('hidden');
 
@@ -273,15 +276,15 @@
       
       let companyBadges = '';
       if (currentSelectedRoute.companies.includes('KMB')) {
-        companyBadges += `<span class="px-2 py-0.5 rounded font-bold text-xs bg-red-600 text-white">九巴</span>`;
+        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-red-600 text-white">九巴</span>`;
       }
       if (currentSelectedRoute.companies.includes('CTB')) {
-        companyBadges += `<span class="px-2 py-0.5 rounded font-bold text-xs bg-yellow-400 text-black">城巴</span>`;
+        companyBadges += `<span class="px-2 py-0.5 rounded-lg font-bold text-xs bg-amber-400 text-amber-950">城巴</span>`;
       }
 
       headerEl.innerHTML = `
         <div class="flex items-center space-x-1">${companyBadges}</div>
-        <span class="text-lg font-bold ml-2">${currentSelectedRoute.route}</span>
+        <span class="text-lg font-bold ml-2 text-stone-900">${currentSelectedRoute.route}</span>
       `;
 
       document.getElementById('selectedRouteDir').textContent = `${currentSelectedRoute.origTc} ➔ ${currentSelectedRoute.destTc}`;
@@ -336,7 +339,6 @@
         if (outStops.length === 0) return await fetchCtbStopDetails(inStops);
         if (inStops.length === 0) return await fetchCtbStopDetails(outStops);
 
-        // Determine which CTB direction matches KMB's start & end stops
         const kmbFirst = kmbStops[0];
         const [outFirstDetail, inFirstDetail] = await Promise.all([
           fetch(`${CTB_BASE}/stop/${outStops[0].stop}`).then(r => r.json()).catch(() => ({ data: null })),
@@ -402,7 +404,6 @@
 
         if (route.companies.includes('CTB')) {
           if (isJoint && kmbStopsDetailed.length > 0) {
-            // Automatically detect matching CTB direction
             ctbStopsDetailed = await getMatchingCtbStops(route.route, kmbStopsDetailed);
           } else {
             const isOutbound = route.dir === 'outbound';
@@ -412,7 +413,6 @@
           }
         }
 
-        // Accurately pair KMB and CTB stops using GPS location & name matching
         let finalStops = [];
         if (isJoint && kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
           finalStops = kmbStopsDetailed.map((kStop) => {
@@ -445,26 +445,30 @@
 
       stops.forEach(s => {
         const card = document.createElement('div');
-        card.className = "bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 hover:border-blue-300 transition cursor-pointer flex items-center space-x-3";
+        card.className = "bg-white p-3.5 rounded-2xl shadow-sm border border-amber-200/60 hover:border-amber-500 transition cursor-pointer flex items-center space-x-3";
         card.onclick = () => fetchETA(s, card);
 
         card.innerHTML = `
-          <div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs flex-shrink-0">
+          <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs flex-shrink-0 border border-amber-200">
             ${s.seq}
           </div>
-          <div class="text-md font-medium text-gray-800">${s.name}</div>
+          <div class="text-md font-medium text-stone-800">${s.name}</div>
         `;
         container.appendChild(card);
       });
     }
 
     async function fetchETA(stop, activeCard) {
-      document.querySelectorAll('#stopListView > div').forEach(el => el.classList.remove('border-blue-500', 'bg-blue-50'));
-      if (activeCard) activeCard.classList.add('border-blue-500', 'bg-blue-50');
+      document.querySelectorAll('#stopListView > div').forEach(el => {
+        el.classList.remove('border-amber-600', 'bg-amber-50/80', 'shadow-md');
+      });
+      if (activeCard) {
+        activeCard.classList.add('border-amber-600', 'bg-amber-50/80', 'shadow-md');
+      }
 
       document.getElementById('selectedStopInfo').textContent = `已選車站：${stop.seq}. ${stop.name}`;
       const etaContainer = document.getElementById('etaContainer');
-      etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
+      etaContainer.innerHTML = `<span class="text-sm text-stone-500 animate-pulse flex items-center space-x-1"><span>🍄</span><span>查詢實時時間中...</span></span>`;
 
       try {
         let fetchPromises = [];
@@ -496,7 +500,7 @@
           .filter(item => {
             if (!item || !item.eta) return false;
 
-            // Filter out buses heading back to the origin terminal (e.g. at terminus stops)
+            // Filter out buses heading back to the origin terminal
             if (item.dest_tc) {
               const destClean = cleanStopName(item.dest_tc);
               const origClean = cleanStopName(currentSelectedRoute.origTc);
@@ -508,17 +512,28 @@
           })
           .map(item => {
             const etaDate = new Date(item.eta);
-            const diffMin = Math.round((etaDate - now) / 60000);
-            if (diffMin < 0) return null;
+            let diffMin = Math.round((etaDate - now) / 60000);
+            
+            // At stop 1 (origin) or for un-departed buses, preserve scheduled ETAs
+            if (diffMin < 0) {
+              if (stop.seq === 1 || diffMin >= -5) {
+                diffMin = 0;
+              } else {
+                return null;
+              }
+            }
 
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
             const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
+            const rmk = item.rmk_tc || item.rmk_en || '';
 
             return {
               company: co,
               mins: diffMin,
-              exactTime: `${hh}:${mm}`
+              exactTime: `${hh}:${mm}`,
+              rmk: rmk,
+              rawTime: etaDate.getTime()
             };
           })
           .filter(item => item !== null);
@@ -534,37 +549,47 @@
           }
         });
 
-        uniqueEtas.sort((a, b) => a.mins - b.mins);
+        // Sort chronologically
+        uniqueEtas.sort((a, b) => a.rawTime - b.rawTime);
         
-        // Show top 3 earliest ETAs
+        // Strictly show the top 3 ETAs
         const nextETAs = uniqueEtas.slice(0, 3);
 
         etaContainer.innerHTML = '';
 
         if (nextETAs.length === 0) {
-          etaContainer.innerHTML = `<span class="text-sm text-red-500 font-medium">暫無即時班次資料</span>`;
+          etaContainer.innerHTML = `<span class="text-sm text-rose-600 font-medium">暫無即時班次資料</span>`;
         } else {
           nextETAs.forEach((item, idx) => {
             const badge = document.createElement('div');
-            badge.className = "bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg shadow-sm flex items-center space-x-2";
+            badge.className = "bg-[#7a4831] text-amber-50 text-sm font-semibold px-3 py-1.5 rounded-xl shadow-sm flex items-center space-x-2 border border-[#633824]";
             
-            const durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
+            let durationLabel = '';
+            if (stop.seq === 1) {
+              durationLabel = item.mins === 0 ? '即將開出' : `${item.mins} 分鐘`;
+            } else {
+              durationLabel = item.mins === 0 ? '即將到站' : `${item.mins} 分鐘`;
+            }
+
             const isKmb = item.company === 'KMB';
-            const coBg = isKmb ? 'bg-red-700 text-white' : 'bg-yellow-400 text-black';
+            const coBg = isKmb ? 'bg-red-700 text-white' : 'bg-amber-400 text-amber-950';
             const coName = isKmb ? '九巴' : '城巴';
             const companyBadgeHtml = `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${coBg}">${coName}</span>`;
+
+            const rmkTag = item.rmk ? `<span class="text-xs bg-amber-200/20 px-1.5 py-0.5 rounded text-amber-200 font-normal">${item.rmk}</span>` : '';
 
             badge.innerHTML = `
               <div class="flex items-center space-x-1.5">
                 ${companyBadgeHtml}
                 <span>第 ${idx + 1} 班: ${durationLabel} (${item.exactTime})</span>
+                ${rmkTag}
               </div>
             `;
             etaContainer.appendChild(badge);
           });
         }
       } catch (err) {
-        etaContainer.innerHTML = `<span class="text-sm text-red-500">無法獲取實時數據</span>`;
+        etaContainer.innerHTML = `<span class="text-sm text-rose-600">無法獲取實時數據</span>`;
       }
     }
 
@@ -574,7 +599,7 @@
       document.getElementById('stopListView').classList.add('hidden');
       document.getElementById('infoCard').classList.add('hidden');
       document.getElementById('backBtn').classList.add('hidden');
-      document.getElementById('appTitle').textContent = "Gugubus 菇專用香港巴士實時到站查詢";
+      document.getElementById('appTitle').innerHTML = `<span>🍄</span><span>Gugubus 菇專用香港巴士實時到站查詢</span>`;
     }
 
     function showLoading(isLoading) {
