@@ -125,31 +125,37 @@
       return date.getDay() === 0 || isHongKongPublicHoliday(date);
     }
 
-    // Check if Central Chater Road Pedestrian Zone is active (Sunday & Public Holidays 07:00-24:00)
-    function isChaterRoadPedestrianZoneActive(date = new Date()) {
+    // Check if Pedestrian Zone is active (Sunday & Public Holidays 07:00-24:00)
+    function isPedestrianZoneActive(date = new Date()) {
       const isSunPH = isSundayOrPublicHoliday(date);
       const hour = date.getHours();
       return isSunPH && (hour >= 7 && hour < 24);
     }
 
-    function filterPedestrianZoneStops(stops, date = new Date()) {
-      const isPedestrianZoneActive = isChaterRoadPedestrianZoneActive(date);
+    // Universal Pedestrian Zone & Special Diversion Filter for ALL bus routes
+    function filterSpecialDayAndZoneStops(stops, date = new Date()) {
+      const pedZoneActive = isPedestrianZoneActive(date);
 
       return stops.filter(s => {
         const name = s.name || '';
-        
-        // Stops on Chater Road / Ice House Street / Statue Square (Chater Rd)
-        const isChaterRoadStop = /遮打道|冰廠街|聖佐治大廈.*遮打|皇后像廣場.*遮打/i.test(name) ||
-                                 (s.ctbStopId && ['001032', '001033', '001034'].includes(s.ctbStopId));
-        
-        // Sunday / Public Holiday Diversion stops on Des Voeux Road Central
-        const isChaterDiversionStop = /遮打大廈.*德輔道|歷山大廈.*德輔道|皇后像廣場.*德輔道/i.test(name) ||
-                                     (s.ctbStopId && ['001035', '001036', '001037'].includes(s.ctbStopId));
+        const ctbId = s.ctbStopId || '';
 
-        if (isPedestrianZoneActive) {
-          if (isChaterRoadStop) return false;
+        // 1. Central Chater Road / Statue Square Pedestrian Zone
+        const isChaterZoneStop = /遮打道|冰廠街|聖佐治大廈.*遮打|皇后像廣場.*遮打/i.test(name) ||
+                                 ['001032', '001033', '001034'].includes(ctbId);
+        
+        const isChaterDiversionStop = /遮打大廈.*德輔道|歷山大廈.*德輔道|皇后像廣場.*德輔道/i.test(name) ||
+                                     ['001035', '001036', '001037'].includes(ctbId);
+
+        // 2. Causeway Bay Lockhart Road / East Point Road Pedestrian Zone
+        const isCwbPedZoneStop = /駱克道.*百德新街|東角道/i.test(name);
+        const isCwbPedDiversionStop = /軒尼詩道.*崇光|邊寧頓街/i.test(name) && /假日改道/i.test(name);
+
+        // Filter logic based on Pedestrian Zone state
+        if (pedZoneActive) {
+          if (isChaterZoneStop || isCwbPedZoneStop) return false;
         } else {
-          if (isChaterDiversionStop) return false;
+          if (isChaterDiversionStop || isCwbPedDiversionStop) return false;
         }
 
         return true;
@@ -648,7 +654,7 @@
       });
     }
 
-    // Real-Time ETA Probing: Verifies live active ETAs across all candidate stops
+    // Universal Real-Time ETA Probing for Active Stop Validation across ALL Routes
     async function validateActiveStopsViaEta(routeNum, stops, companies) {
       if (!stops || stops.length === 0) return stops;
 
@@ -678,7 +684,7 @@
 
       const totalActiveEtas = etaCheckResults.filter(r => r.hasEta).length;
 
-      // If the route is currently operating (at least 2 stops return live ETAs)
+      // If the route is operating right now (at least 2 stops return live ETAs)
       if (totalActiveEtas >= 2) {
         return stops.filter((stop, idx) => {
           const isStartOrEnd = (idx === 0 || idx === stops.length - 1);
@@ -757,10 +763,10 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
-        // 4. Apply Calendar & Pedestrian Zone Filtering (e.g. CTB 1, 2, 5B, 10 Chater Road Sun/PH diversions)
-        finalStops = filterPedestrianZoneStops(finalStops, new Date());
+        // 4. Apply Universal Calendar & Pedestrian Zone Filtering for ALL Routes
+        finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
 
-        // 5. Apply Real-Time ETA Probing for Active Stop Validation
+        // 5. Apply Universal Real-Time ETA Probing for Active Stop Validation across ALL Routes
         finalStops = await validateActiveStopsViaEta(route.route, finalStops, route.companies);
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
