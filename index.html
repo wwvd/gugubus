@@ -9,7 +9,7 @@
 <body class="bg-gray-100 min-h-screen text-gray-800 font-sans">
 
   <!-- Header -->
-  <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-50 flex justify-between items-center">
+  <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-50 flex justify-between items-center h-[60px]">
     <div class="flex items-center space-x-2">
       <button id="backBtn" class="hidden text-sm bg-blue-700 hover:bg-blue-800 px-3 py-1.5 rounded-lg transition" onclick="showRouteList()">
         ← 返回路線
@@ -20,8 +20,8 @@
 
   <main class="max-w-3xl mx-auto p-4">
 
-    <!-- Selected Info Banner -->
-    <div id="infoCard" class="hidden bg-white p-4 rounded-xl shadow-md mb-4 border border-gray-200">
+    <!-- Selected Info Banner (Sticky at top when scrolling stops) -->
+    <div id="infoCard" class="hidden sticky top-[60px] z-40 bg-white/95 backdrop-blur-md p-4 rounded-xl shadow-md mb-4 border border-gray-200 transition-all">
       <div class="flex justify-between items-start mb-1">
         <div id="selectedRouteHeader" class="flex items-center space-x-2"></div>
         <!-- Direction Switch Button -->
@@ -262,35 +262,66 @@
 
       try {
         const route = currentSelectedRoute;
-        let stopsDetailed = [];
+        const isJoint = route.companies.includes('KMB') && route.companies.includes('CTB');
 
-        if (route.primaryCompany === 'KMB') {
-          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${route.dir}/${route.serviceType}`).then(r => r.json());
+        let kmbStopsDetailed = [];
+        let ctbStopsDetailed = [];
+
+        // Fetch KMB stops if route includes KMB
+        if (route.companies.includes('KMB')) {
+          const kmbVar = route.variants.find(v => v.company === 'KMB') || {};
+          const isOutbound = route.dir === 'outbound';
+          const dir = isOutbound ? 'outbound' : 'inbound';
+          const res = await fetch(`${KMB_BASE}/route-stop/${route.route}/${dir}/${kmbVar.serviceType || '1'}`).then(r => r.json());
           const rawStops = res.data || [];
 
-          stopsDetailed = await Promise.all(rawStops.map(async (s) => {
+          kmbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             let name = `巴士站 ${s.seq}`;
             try {
               const stopRes = await fetch(`${KMB_BASE}/stop/${s.stop}`).then(r => r.json());
               name = stopRes.data?.name_tc || name;
             } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name, company: 'KMB' };
+            return { stopId: s.stop, seq: s.seq, name };
           }));
-        } else {
-          const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${route.dir}`).then(r => r.json());
+        }
+
+        // Fetch CTB stops if route includes CTB
+        if (route.companies.includes('CTB')) {
+          const isOutbound = route.dir === 'outbound';
+          const dir = isOutbound ? 'outbound' : 'inbound';
+          const res = await fetch(`${CTB_BASE}/route-stop/CTB/${route.route}/${dir}`).then(r => r.json());
           const rawStops = res.data || [];
 
-          stopsDetailed = await Promise.all(rawStops.map(async (s) => {
+          ctbStopsDetailed = await Promise.all(rawStops.map(async (s) => {
             let name = `巴士站 ${s.seq}`;
             try {
               const stopRes = await fetch(`${CTB_BASE}/stop/${s.stop}`).then(r => r.json());
               name = stopRes.data?.name_tc || name;
             } catch (e) {}
-            return { stopId: s.stop, seq: s.seq, name, company: 'CTB' };
+            return { stopId: s.stop, seq: s.seq, name };
           }));
         }
 
-        renderStops(stopsDetailed.sort((a, b) => a.seq - b.seq));
+        // Merge stop IDs for joint routes by station name matching
+        let finalStops = [];
+        if (isJoint && kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
+          finalStops = kmbStopsDetailed.map((kStop, index) => {
+            const kNorm = normalizeTerminus(kStop.name);
+            const matchedCtb = ctbStopsDetailed.find(cStop => normalizeTerminus(cStop.name) === kNorm) || ctbStopsDetailed[index];
+            return {
+              seq: kStop.seq,
+              name: kStop.name,
+              kmbStopId: kStop.stopId,
+              ctbStopId: matchedCtb ? matchedCtb.stopId : null
+            };
+          });
+        } else if (kmbStopsDetailed.length > 0) {
+          finalStops = kmbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: s.stopId, ctbStopId: null }));
+        } else {
+          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name: s.name, kmbStopId: null, ctbStopId: s.stopId }));
+        }
+
+        renderStops(finalStops.sort((a, b) => a.seq - b.seq));
       } catch (err) {
         alert("無法加載車站列表。");
       } finally {
@@ -327,15 +358,31 @@
       etaContainer.innerHTML = `<span class="text-sm text-gray-500 animate-pulse">查詢實時時間中...</span>`;
 
       try {
-        let etaUrl = "";
-        if (stop.company === 'KMB') {
-          etaUrl = `${KMB_BASE}/eta/${stop.stopId}/${currentSelectedRoute.route}/${currentSelectedRoute.serviceType}`;
-        } else {
-          etaUrl = `${CTB_BASE}/eta/CTB/${stop.stopId}/${currentSelectedRoute.route}`;
+        let fetchPromises = [];
+
+        // Fetch from KMB API if KMB stop ID exists
+        if (stop.kmbStopId) {
+          const kmbVar = currentSelectedRoute.variants.find(v => v.company === 'KMB') || { serviceType: '1' };
+          fetchPromises.push(
+            fetch(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${kmbVar.serviceType}`)
+              .then(r => r.json())
+              .then(res => (res.data || []).map(item => ({ ...item, defaultCo: 'KMB' })))
+              .catch(() => [])
+          );
         }
 
-        const res = await fetch(etaUrl).then(r => r.json());
-        const rawEtas = res.data || [];
+        // Fetch from Citybus API if CTB stop ID exists
+        if (stop.ctbStopId) {
+          fetchPromises.push(
+            fetch(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`)
+              .then(r => r.json())
+              .then(res => (res.data || []).map(item => ({ ...item, defaultCo: 'CTB' })))
+              .catch(() => [])
+          );
+        }
+
+        const results = await Promise.all(fetchPromises);
+        const rawEtas = results.flat();
         const now = new Date();
         const targetDirCode = currentSelectedRoute.dir === 'outbound' ? 'O' : 'I';
 
@@ -343,19 +390,12 @@
           .filter(item => {
             if (!item || !item.eta) return false;
 
-            // Filter out reverse-direction ETAs at terminus stops
             if (item.dir) {
               const itemDir = item.dir.toUpperCase();
               if (itemDir !== targetDirCode && itemDir !== currentSelectedRoute.dir.toUpperCase()) {
                 return false;
               }
             }
-
-            // Filter out ETAs belonging to different sequence numbers if sequence is returned
-            if (item.seq && stop.seq && Number(item.seq) !== Number(stop.seq)) {
-              return false;
-            }
-
             return true;
           })
           .map(item => {
@@ -365,7 +405,7 @@
 
             const hh = String(etaDate.getHours()).padStart(2, '0');
             const mm = String(etaDate.getMinutes()).padStart(2, '0');
-            const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : stop.company;
+            const co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
 
             return {
               company: co,
@@ -386,10 +426,9 @@
           }
         });
 
+        // Combine and sort chronologically
         uniqueEtas.sort((a, b) => a.mins - b.mins);
-
-        // Strict max 3 ETAs to align with official KMB & Citybus apps
-        const nextETAs = uniqueEtas.slice(0, 3);
+        const nextETAs = uniqueEtas.slice(0, 4);
 
         etaContainer.innerHTML = '';
 
