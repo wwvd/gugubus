@@ -89,13 +89,9 @@
     const ctbStopMap = new Map();
 
     function fetchFresh(url, options = {}) {
-      // Do not append extra query parameters to MTR Bus endpoints
-      if (url.includes('mtr/bus')) {
-        return fetch(url, { ...options, cache: 'no-store' });
-      }
       const sep = url.includes('?') ? '&' : '?';
       const freshUrl = `${url}${sep}_t=${Date.now()}`;
-      return fetch(freshUrl, { ...options, cache: 'no-store' });
+      return fetch(freshUrl, options);
     }
 
     function cleanStopName(name) {
@@ -107,14 +103,21 @@
         .trim();
     }
 
-    function splitRouteDescription(desc) {
-      if (!desc) return { orig: '', dest: '' };
-      // Clean non-capturing regex to avoid SyntaxError in character classes
-      const parts = desc.split(/\s*(?:>|–|—|-|⇄|至|往)\s*/).filter(Boolean);
-      return {
-        orig: parts[0] || '',
-        dest: parts[1] || parts[0] || ''
-      };
+    function parseRouteEndpoints(str) {
+      if (!str) return { orig: '', dest: '' };
+      let clean = str.replace(/（.*?）|\(.*?\)|【.*?】/g, '').trim();
+      const delimiters = ['>', '⇄', '至', '往', '–', '—', '-'];
+      for (let d of delimiters) {
+        if (clean.includes(d)) {
+          const parts = clean.split(d).map(p => p.trim()).filter(Boolean);
+          if (parts.length >= 2) {
+            return { orig: parts[0], dest: parts[1] };
+          } else if (parts.length === 1) {
+            return { orig: parts[0], dest: parts[0] };
+          }
+        }
+      }
+      return { orig: clean, dest: clean };
     }
 
     function filterCalendarAwareStops(stops, routeNum) {
@@ -298,31 +301,31 @@
 
         const rawNlb = nlbRes.routes || nlbRes.data || [];
         const nlbRoutes = rawNlb.map(r => {
-          const tcName = r.routeNameTC || r.routeName_tc || r.routeName || '';
-          const parsed = splitRouteDescription(tcName);
+          const tcName = r.routeNameTC || r.routeName_tc || r.routeName || r.route_name_tc || '';
+          const parsed = parseRouteEndpoints(tcName);
           return {
             company: 'NLB',
-            route: r.routeNo ? r.routeNo.trim() : (r.route_no ? r.route_no.trim() : ''),
+            route: String(r.routeNo || r.route_no || '').trim(),
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig || r.origNameTC || '起點',
-            destTc: parsed.dest || r.destNameTC || '終點',
-            nlbRouteId: String(r.routeId || r.route_id)
+            origTc: parsed.orig || r.origNameTC || r.orig_tc || '嶼巴起點',
+            destTc: parsed.dest || r.destNameTC || r.dest_tc || '嶼巴終點',
+            nlbRouteId: String(r.routeId || r.route_id || '')
           };
         });
 
         const rawMtr = mtrRes.busRoutes || mtrRes.routes || mtrRes.bus || mtrRes.data || [];
         const mtrRoutes = rawMtr.map(r => {
-          const name = (r.routeName || r.route || r.routeNameZh || '').trim();
+          const name = String(r.routeName || r.route || r.routeNameZh || '').trim();
           const desc = r.routeDescription || r.description || r.routeNameZh || '';
-          const parsed = splitRouteDescription(desc);
+          const parsed = parseRouteEndpoints(desc);
           return {
             company: 'MTRB',
             route: name,
             bound: 'outbound',
             serviceType: '1',
-            origTc: parsed.orig || '起點',
-            destTc: parsed.dest || '終點'
+            origTc: parsed.orig || '港鐵巴士起點',
+            destTc: parsed.dest || '港鐵巴士終點'
           };
         });
 
@@ -330,7 +333,9 @@
         const routeGroups = [];
 
         combined.forEach(r => {
-          if (!r.route || !r.origTc || !r.destTc) return;
+          if (!r.route) return;
+          if (!r.origTc) r.origTc = r.route;
+          if (!r.destTc) r.destTc = r.route;
           
           let matchedGroup = routeGroups.find(g => isSameRouteGroup(g, r));
           
@@ -588,16 +593,16 @@
               const cRDest = cleanStopName(route.destTc);
               return (cVOrig.includes(cROrig) || cROrig.includes(cVOrig)) &&
                      (cVDest.includes(cRDest) || cRDest.includes(cVDest));
-            }) || (isOutbound ? nlbVars[0] : nlbVars[1]);
+            }) || (isOutbound ? nlbVars[0] : (nlbVars[1] || nlbVars[0]));
           }
 
           if (chosenVariant && chosenVariant.nlbRouteId) {
             const res = await fetchFresh(`${NLB_BASE}/stop.php?action=list&routeId=${chosenVariant.nlbRouteId}`).then(r => r.json()).catch(() => ({ stops: [] }));
             const rawStops = res.stops || res.data || [];
             nlbStopsDetailed = rawStops.map((s, idx) => {
-              const stopName = s.stopName_tc || s.stopName_c || s.stopNameTC || s.stopName_en || s.stopNameEN || s.stopName || `車站 ${idx+1}`;
+              const stopName = s.stopNameTC || s.stopName_tc || s.stopName_c || s.stopNameEN || s.stopName || `車站 ${idx+1}`;
               return {
-                stopId: String(s.stopId),
+                stopId: String(s.stopId || s.stop_id),
                 seq: idx + 1,
                 name: stopName,
                 lat: parseFloat(s.latitude || 0),
