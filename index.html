@@ -267,7 +267,7 @@
         .trim();
     }
 
-    // Advanced Universal Bilingual Stop Name Matcher
+    // Universal Substring & Word Token Overlap Matcher
     function getStopNameSimilarity(name1, name2) {
       if (!name1 || !name2) return 0;
       
@@ -277,36 +277,29 @@
 
       const c1 = cleanStopName(n1);
       const c2 = cleanStopName(n2);
-      if (c1 === c2) return 1.0;
       if (!c1 || !c2) return 0;
+      if (c1 === c2) return 1.0;
 
-      // Substring inclusion check (e.g. "秀程樓" vs "秀程樓, 秀茂坪道" or "SAU CHING HOUSE" vs "SAU CHING HOUSE, SAU MAU PING ROAD")
+      // Substring inclusion check (e.g. "秀程樓" vs "秀程樓, 秀茂坪道")
       if (c1.includes(c2) || c2.includes(c1)) {
-        const minLen = Math.min(c1.length, c2.length);
-        if (minLen >= 2) return 0.90;
+        if (Math.min(c1.length, c2.length) >= 2) return 0.95;
       }
 
       // Word Token Overlap for English / Chinese phrases
-      const tokens1 = n1.replace(/[^\w\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(t => t.length > 1);
-      const tokens2 = n2.replace(/[^\w\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(t => t.length > 1);
+      const t1 = n1.replace(/[^\w\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(x => x.length > 0);
+      const t2 = n2.replace(/[^\w\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(x => x.length > 0);
 
-      if (tokens1.length > 0 && tokens2.length > 0) {
+      if (t1.length > 0 && t2.length > 0) {
         let common = 0;
-        const set2 = new Set(tokens2);
-        tokens1.forEach(t => { if (set2.has(t)) common++; });
+        t1.forEach(word => {
+          if (t2.some(w2 => w2.includes(word) || word.includes(w2))) common++;
+        });
         
-        const minTokens = Math.min(tokens1.length, tokens2.length);
-        const tokenScore = common / minTokens;
-        if (tokenScore >= 0.75 && minTokens >= 1) return 0.85;
+        const ratio = common / Math.min(t1.length, t2.length);
+        if (ratio >= 0.5) return 0.85;
       }
 
-      // Character overlap ratio
-      let charMatches = 0;
-      const set2 = new Set(c2.split(''));
-      for (const char of c1) {
-        if (set2.has(char)) charMatches++;
-      }
-      return charMatches / Math.min(c1.length, c2.length);
+      return 0;
     }
 
     function isJointRouteNumber(routeNum) {
@@ -718,7 +711,7 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
-    // Universal Non-Greedy Joint Stop Matcher using Substring/Token Alignment
+    // Universal Non-Greedy Joint Stop Matcher
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -745,29 +738,29 @@
       }
 
       const usedCtbIndices = new Set();
-      const matched = kmbStops.map((kStop, kIdx) => {
+      return kmbStops.map((kStop, kIdx) => {
         let bestCtbIdx = -1;
         let bestScore = -1;
 
         ctbStops.forEach((cStop, cIdx) => {
           if (usedCtbIndices.has(cIdx)) return;
 
+          let score = 0;
           const simTc = getStopNameSimilarity(kStop.name_tc, cStop.name_tc);
           const simEn = getStopNameSimilarity(kStop.name_en, cStop.name_en);
-          let score = Math.max(simTc, simEn);
+          const nameSim = Math.max(simTc, simEn);
 
           const dist = getHaversineDistanceKm(kStop.lat, kStop.long, cStop.lat, cStop.long);
 
           if (dist != null) {
-            if (dist < 0.15) score += 0.50; // within 150m
-            else if (dist < 0.35) score += 0.25; // within 350m
+            if (dist < 0.15) score += 0.60;
+            else if (dist < 0.35) score += 0.35;
+            else if (dist < 0.60) score += 0.15;
           }
 
-          const kRatio = kIdx / Math.max(1, kmbStops.length - 1);
-          const cRatio = cIdx / Math.max(1, ctbStops.length - 1);
-          if (Math.abs(kRatio - cRatio) < 0.20) score += 0.15;
+          score += nameSim * 0.5;
 
-          if (score > bestScore && (score >= 0.35 || (dist != null && dist < 0.3))) {
+          if (score > bestScore && (score >= 0.30 || (dist != null && dist < 0.35))) {
             bestScore = score;
             bestCtbIdx = cIdx;
           }
@@ -797,8 +790,6 @@
           long: kStop.long || ctbLong
         };
       });
-
-      return matched;
     }
 
     function isValidRealtimeEta(item, targetDirStr, origTc, destTc, now = new Date()) {
@@ -808,39 +799,17 @@
       const hasEtaSeconds = typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond);
       if (!hasEtaString && !hasEtaSeconds) return false;
 
-      const cleanOrig = cleanStopName(origTc);
-      const cleanDest = cleanStopName(destTc);
-      const rawDest = (item.dest_tc || item.dest_en || '').trim();
-      const cleanItemDest = cleanStopName(rawDest);
-
-      if (cleanItemDest && cleanOrig && cleanDest && cleanOrig !== cleanDest) {
-        const simToOrig = getStopNameSimilarity(cleanItemDest, cleanOrig);
-        const simToDest = getStopNameSimilarity(cleanItemDest, cleanDest);
-
-        if (simToOrig > simToDest && simToOrig >= 0.40) {
-          return false;
-        }
-      }
-
-      const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
-      const hardOffKeywords = [
-        '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
-        '服務已結束', '服務結束', '非服務時間', '非營運時間', '非營運時段', '暫停服務', '未有班次', '班次未定',
-        '已過總站', '已駛離', '已開出',
-        'last bus passed', 'last bus departed', 'end of service', 'out of service', 'service ended', 'no service'
-      ];
-
-      for (const kw of hardOffKeywords) {
-        if (rmk.includes(kw)) {
-          return false;
-        }
-      }
-
       const etaDate = parseEtaToDate(item, now);
       if (!etaDate) return false;
 
       const diffMs = etaDate.getTime() - now.getTime();
       if (diffMs < -60000) return false;
+
+      const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
+      const hardOffKeywords = ['尾班車已過', '末班車已過', '最後班次已過', '服務已結束', '非服務時間', '暫停服務', 'last bus passed', 'end of service', 'out of service'];
+      for (const kw of hardOffKeywords) {
+        if (rmk.includes(kw)) return false;
+      }
 
       return true;
     }
@@ -865,6 +834,7 @@
 
             const sortedRawStops = [...rawStops].sort((a, b) => a.seq - b.seq);
 
+            // Fully Pre-resolve KMB details (name_tc, name_en, lat, long)
             kmbStopsDetailed = await Promise.all(sortedRawStops.map(async (s) => {
               const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
               return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
@@ -873,7 +843,7 @@
         }
 
         if (route.companies.includes('CTB')) {
-          // Fetch CTB stops across both outbound and inbound directions to guarantee candidate coverage
+          // Fetch both CTB directions in parallel
           const [resOut, resIn] = await Promise.all([
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 6000, 2),
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 6000, 2)
@@ -882,34 +852,17 @@
           const rawOut = (resOut && resOut.data) || [];
           const rawIn = (resIn && resIn.data) || [];
 
-          let matchCountOut = 0;
-          let matchCountIn = 0;
-
-          if (kmbStopsDetailed.length > 0) {
-            rawOut.forEach(cS => {
-              if (kmbStopsDetailed.some(kS => getStopNameSimilarity(kS.name_tc, cS.stop) > 0.4 || getStopNameSimilarity(kS.name_en, cS.stop) > 0.4)) {
-                matchCountOut++;
-              }
-            });
-            rawIn.forEach(cS => {
-              if (kmbStopsDetailed.some(kS => getStopNameSimilarity(kS.name_tc, cS.stop) > 0.4 || getStopNameSimilarity(kS.name_en, cS.stop) > 0.4)) {
-                matchCountIn++;
-              }
-            });
-          }
-
-          const primaryRaw = (matchCountIn > matchCountOut && rawIn.length > 0) ? rawIn : (rawOut.length > 0 ? rawOut : rawIn);
-          const secondaryRaw = (primaryRaw === rawOut) ? rawIn : rawOut;
-          
-          // Pool unique CTB route stops
-          const combinedRawCtb = [...primaryRaw];
-          secondaryRaw.forEach(s => {
-            if (!combinedRawCtb.some(p => p.stop === s.stop)) {
-              combinedRawCtb.push(s);
+          const ctbStopsCombined = [];
+          const seenCtbStopIds = new Set();
+          [...rawOut, ...rawIn].forEach(s => {
+            if (!seenCtbStopIds.has(s.stop)) {
+              seenCtbStopIds.add(s.stop);
+              ctbStopsCombined.push(s);
             }
           });
 
-          ctbStopsDetailed = await Promise.all(combinedRawCtb.map(async (s) => {
+          // Pre-resolve CTB stop details for all candidates before matching
+          ctbStopsDetailed = await Promise.all(ctbStopsCombined.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
             return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
           }));
@@ -1050,9 +1003,8 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
-      // Multi-Layer Universal Resolution Fallback
+      // Multi-Tier Dynamic CTB ID Resolution Fallback
       if (isJoint && !ctbId) {
-        // Tier 1: Search current route's detailed CTB stops pool using token similarity
         if (currentSelectedRoute.ctbStopsDetailed && currentSelectedRoute.ctbStopsDetailed.length > 0) {
           let bestRouteScore = -1;
           let bestRouteCtb = null;
@@ -1076,11 +1028,10 @@
 
           if (bestRouteCtb && bestRouteScore >= 0.35) {
             ctbId = bestRouteCtb.stopId;
-            stop.ctbStopId = ctbId; // Cache dynamically
+            stop.ctbStopId = ctbId;
           }
         }
 
-        // Tier 2: Search global pre-cached CTB stops map
         if (!ctbId && ctbStopMap.size > 0) {
           let bestGlobalId = null;
           let bestGlobalScore = -1;
@@ -1092,10 +1043,10 @@
 
             if (stop.lat != null && stop.long != null && info.lat != null && info.long != null) {
               const dist = getHaversineDistanceKm(stop.lat, stop.long, info.lat, info.long);
-              if (dist < 0.3) {
+              if (dist < 0.35) {
                 score += (dist < 0.15 ? 0.5 : 0.2);
               } else {
-                score = 0; // Skip out of range
+                score = 0;
               }
             }
 
@@ -1118,13 +1069,19 @@
         
         fetchPromises.push(
           fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/${serviceType}`, {}, 4000, 2)
-            .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
+            .then(res => ((res && res.data) || []).map(item => ({
+              ...item,
+              defaultCo: routeIsLwb ? 'LWB' : (item.co && item.co.trim() ? item.co.trim().toUpperCase() : defaultTag)
+            })))
         );
 
         if (serviceType !== '1') {
           fetchPromises.push(
             fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/1`, {}, 4000, 2)
-              .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
+              .then(res => ((res && res.data) || []).map(item => ({
+                ...item,
+                defaultCo: routeIsLwb ? 'LWB' : (item.co && item.co.trim() ? item.co.trim().toUpperCase() : defaultTag)
+              })))
           );
         }
       }
@@ -1162,7 +1119,6 @@
         const destTc = currentSelectedRoute.destTc;
         const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
 
-        // Fetch Origin ETAs across all participating bus companies
         const rawOrigEtas = await fetchStopRawEtas(currentOriginStop);
         const formattedOrigEtas = rawOrigEtas
           .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
@@ -1198,10 +1154,8 @@
           }
         });
 
-        // Global sorting across all companies
         uniqueOrigEtas.sort((a, b) => a.rawTime - b.rawTime);
 
-        // Render top 3 overall arrival predictions
         const nextETAs = uniqueOrigEtas.slice(0, 3);
         etaContainer.innerHTML = '';
 
