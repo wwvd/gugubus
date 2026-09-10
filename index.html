@@ -708,7 +708,6 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
-    // Universal Direction Alignment Engine (KMB vs CTB Terminal Mapping)
     function alignCtbDirection(kmbStops, ctbOutStops, ctbInStops, kmbOrigTc, kmbDestTc) {
       if (!ctbOutStops.length && !ctbInStops.length) return 'outbound';
       if (!ctbOutStops.length) return 'inbound';
@@ -734,11 +733,14 @@
       return (inScore > outScore) ? 'inbound' : 'outbound';
     }
 
+    // Sequence-Preserving Joint Stop Matcher
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
           return ctbStops.map(s => ({
             seq: s.seq,
+            kmbSeq: null,
+            ctbSeq: s.seq,
             name_tc: s.name_tc,
             name_en: s.name_en,
             ctbStopId: s.stopId,
@@ -751,6 +753,8 @@
       if (!ctbStops || !ctbStops.length) {
         return kmbStops.map(s => ({ 
           seq: s.seq, 
+          kmbSeq: s.seq,
+          ctbSeq: null,
           name_tc: s.name_tc, 
           name_en: s.name_en, 
           kmbStopId: s.stopId, 
@@ -792,6 +796,7 @@
         let ctbNameEn = null;
         let ctbLat = null;
         let ctbLong = null;
+        let ctbSeq = null;
 
         if (bestCtbIdx !== -1) {
           usedCtbIndices.add(bestCtbIdx);
@@ -800,10 +805,13 @@
           ctbNameEn = matchedCStop.name_en;
           ctbLat = matchedCStop.lat;
           ctbLong = matchedCStop.long;
+          ctbSeq = matchedCStop.seq;
         }
 
         return {
           seq: kStop.seq,
+          kmbSeq: kStop.seq,
+          ctbSeq: ctbSeq,
           name_tc: kStop.name_tc,
           name_en: kStop.name_en || ctbNameEn,
           kmbStopId: kStop.stopId,
@@ -814,7 +822,8 @@
       });
     }
 
-    function isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now = new Date()) {
+    // Sequence & Direction Validation Engine
+    function isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now = new Date(), targetStop = null) {
       if (!item) return false;
 
       const hasEtaString = item.eta && String(item.eta).trim() !== '';
@@ -829,6 +838,20 @@
 
       const apiSource = item.apiSource;
       const rawDir = String(item.dir || item.bound || '').trim().toUpperCase();
+
+      // Sequence Number Matching for Circular / Loop Routes (e.g. Route 110)
+      if (targetStop && typeof item.seq !== 'undefined' && item.seq !== null) {
+        const itemSeq = parseInt(item.seq, 10);
+        if (apiSource === 'CTB_API') {
+          if (targetStop.ctbSeq != null && itemSeq !== parseInt(targetStop.ctbSeq, 10)) {
+            return false;
+          }
+        } else {
+          if (targetStop.kmbSeq != null && itemSeq !== parseInt(targetStop.kmbSeq, 10)) {
+            return false;
+          }
+        }
+      }
 
       if (rawDir) {
         const normalizedDir = (rawDir === 'O' || rawDir === 'OUTBOUND' || rawDir === 'OUT' || rawDir === '1') ? 'O' :
@@ -900,7 +923,6 @@
             return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
           }));
 
-          // Align CTB direction relative to active KMB route direction
           const ctbAlignedDir = alignCtbDirection(kmbStopsDetailed, ctbOutStopsDetailed, ctbInStopsDetailed, route.origTc, route.destTc);
           currentSelectedRoute.ctbMatchedDir = ctbAlignedDir;
 
@@ -916,7 +938,7 @@
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
         } else if (ctbStopsDetailed.length > 0) {
-          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
+          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, kmbSeq: null, ctbSeq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
@@ -1068,6 +1090,7 @@
         if (bestRouteCtb && bestRouteScore >= 0.30) {
           ctbId = bestRouteCtb.stopId;
           stop.ctbStopId = ctbId;
+          stop.ctbSeq = bestRouteCtb.seq;
         }
       }
 
@@ -1136,7 +1159,7 @@
 
         const rawOrigEtas = await fetchStopRawEtas(currentOriginStop);
         const formattedOrigEtas = rawOrigEtas
-          .filter(item => isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now))
+          .filter(item => isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now, currentOriginStop))
           .map(item => {
             const etaDate = parseEtaToDate(item, now);
             let diffMin = Math.round((etaDate - now) / 60000);
@@ -1218,7 +1241,7 @@
             try {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
               const validDestEtas = rawDestEtas
-                .filter(item => isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now))
+                .filter(item => isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now, currentDestStop))
                 .map(item => parseEtaToDate(item, now)?.getTime() || 0)
                 .filter(t => t > 0)
                 .sort((a, b) => a - b);
