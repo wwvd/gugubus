@@ -788,7 +788,6 @@
       });
     }
 
-    // Strict Real-Time Direction & Operator Validation
     function isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now = new Date()) {
       if (!item) return false;
 
@@ -802,7 +801,6 @@
       const diffMs = etaDate.getTime() - now.getTime();
       if (diffMs < -60000) return false;
 
-      // Strict Direction Match
       const itemCo = (item.co || item.defaultCo || '').toUpperCase();
       const rawDir = String(item.dir || item.bound || '').trim().toUpperCase();
 
@@ -820,21 +818,6 @@
           if (normalizedItemDir && normalizedItemDir !== expectedKmbChar) {
             return false;
           }
-        }
-      }
-
-      // Terminal Destination Safety Check
-      const cleanOrig = cleanStopName(origTc);
-      const cleanDest = cleanStopName(destTc);
-      const rawDest = (item.dest_tc || item.dest_en || '').trim();
-      const cleanItemDest = cleanStopName(rawDest);
-
-      if (cleanItemDest && cleanOrig && cleanDest && cleanOrig !== cleanDest) {
-        const simToOrig = getStopNameSimilarity(cleanItemDest, cleanOrig);
-        const simToDest = getStopNameSimilarity(cleanItemDest, cleanDest);
-
-        if (simToOrig > simToDest && simToOrig >= 0.40 && simToDest < 0.30) {
-          return false;
         }
       }
 
@@ -1049,6 +1032,7 @@
       return isNaN(d.getTime()) ? null : d;
     }
 
+    // Dynamic On-Click Fetcher with Real-Time Spatial ID Resolution
     async function fetchStopRawEtas(stop) {
       let fetchPromises = [];
       const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
@@ -1057,6 +1041,7 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
+      // On-Demand Dynamic Resolution if ctbId is missing when clicked
       if (isJoint && !ctbId && currentSelectedRoute.ctbStopsDetailed && currentSelectedRoute.ctbStopsDetailed.length > 0) {
         let bestRouteScore = -1;
         let bestRouteCtb = null;
@@ -1078,9 +1063,9 @@
           }
         });
 
-        if (bestRouteCtb && bestRouteScore >= 0.35) {
+        if (bestRouteCtb && bestRouteScore >= 0.30) {
           ctbId = bestRouteCtb.stopId;
-          stop.ctbStopId = ctbId;
+          stop.ctbStopId = ctbId; // Bind for future refreshes
         }
       }
 
@@ -1166,7 +1151,6 @@
             };
           });
 
-        // Deduplicate ETAs within 90-second arrival window
         const uniqueOrigEtas = [];
         formattedOrigEtas.forEach(item => {
           const exists = uniqueOrigEtas.some(u => u.company === item.company && Math.abs(u.rawTime - item.rawTime) < 90000);
@@ -1215,7 +1199,6 @@
           });
         }
 
-        // Multi-Tier Inter-Stop Travel Time Calculation Engine
         if (currentDestStop) {
           const origIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentOriginStop.displaySeq || currentOriginStop.seq));
           const destIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentDestStop.displaySeq || currentDestStop.seq));
