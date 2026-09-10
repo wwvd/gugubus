@@ -852,6 +852,7 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
+    // Flexible Non-Greedy Joint Route Stop Matcher
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -877,35 +878,33 @@
         }));
       }
 
-      let lastMatchedCIdx = 0;
+      const usedCtbIndices = new Set();
       const matched = kmbStops.map((kStop, kIdx) => {
         const kClean = cleanStopName(kStop.name_tc);
         let bestCtbIdx = -1;
         let bestScore = -1;
 
-        for (let cIdx = lastMatchedCIdx; cIdx < ctbStops.length; cIdx++) {
-          const cStop = ctbStops[cIdx];
+        ctbStops.forEach((cStop, cIdx) => {
+          if (usedCtbIndices.has(cIdx)) return;
+
           const cClean = cleanStopName(cStop.name_tc);
-          
           let score = stringSimilarity(kClean, cClean);
           const dist = getGpsDistance(kStop, cStop);
 
-          if (dist < 0.003) { // within 300m
-            score += 0.5;
-          }
+          if (dist < 0.15) score += 0.6; // within 150m
+          else if (dist < 0.3) score += 0.35; // within 300m
+          else if (dist < 0.5) score += 0.15; // within 500m
 
           const kRatio = kIdx / Math.max(1, kmbStops.length - 1);
           const cRatio = cIdx / Math.max(1, ctbStops.length - 1);
           const ratioDiff = Math.abs(kRatio - cRatio);
-          if (ratioDiff < 0.15) {
-            score += 0.2;
-          }
+          if (ratioDiff < 0.2) score += 0.2;
 
-          if (score > bestScore && (score > 0.35 || dist < 0.0025)) {
+          if (score > bestScore && (score > 0.35 || dist < 0.25)) {
             bestScore = score;
             bestCtbIdx = cIdx;
           }
-        }
+        });
 
         let ctbId = null;
         let ctbNameEn = null;
@@ -913,7 +912,7 @@
         let ctbLong = null;
 
         if (bestCtbIdx !== -1) {
-          lastMatchedCIdx = bestCtbIdx;
+          usedCtbIndices.add(bestCtbIdx);
           const matchedCStop = ctbStops[bestCtbIdx];
           ctbId = matchedCStop.stopId;
           ctbNameEn = matchedCStop.name_en;
@@ -1019,24 +1018,25 @@
           const rawOut = (resOut && resOut.data) || [];
           const rawIn = (resIn && resIn.data) || [];
 
-          let chosenRaw = rawOut;
-          if (rawOut.length > 0 && rawIn.length > 0) {
-            const firstOutStopId = rawOut[0]?.stop;
-            const firstOutInfo = await getStopDetail('CTB', firstOutStopId);
-            
-            const origClean = cleanStopName(route.origTc);
-            const destClean = cleanStopName(route.destTc);
-            const firstOutClean = cleanStopName(firstOutInfo.name_tc);
+          // Direction Selection by Empirical Overlap Score against KMB stops
+          let matchCountOut = 0;
+          let matchCountIn = 0;
 
-            const simToOrig = stringSimilarity(firstOutClean, origClean);
-            const simToDest = stringSimilarity(firstOutClean, destClean);
-
-            if (simToDest > simToOrig && simToDest >= 0.3) {
-              chosenRaw = rawIn;
-            }
-          } else if (rawOut.length === 0 && rawIn.length > 0) {
-            chosenRaw = rawIn;
+          if (kmbStopsDetailed.length > 0) {
+            rawOut.forEach(cS => {
+              if (kmbStopsDetailed.some(kS => getGpsDistance(kS, cS) < 0.003 || stringSimilarity(cleanStopName(kS.name_tc), cleanStopName(cS.name_tc)) > 0.6)) {
+                matchCountOut++;
+              }
+            });
+            rawIn.forEach(cS => {
+              if (kmbStopsDetailed.some(kS => getGpsDistance(kS, cS) < 0.003 || stringSimilarity(cleanStopName(kS.name_tc), cleanStopName(cS.name_tc)) > 0.6)) {
+                matchCountIn++;
+              }
+            });
           }
+
+          let chosenRaw = (matchCountIn > matchCountOut) ? rawIn : rawOut;
+          if (chosenRaw.length === 0) chosenRaw = (matchCountOut > 0) ? rawOut : rawIn;
 
           const sortedRawStops = [...chosenRaw].sort((a, b) => a.seq - b.seq);
 
@@ -1183,43 +1183,53 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
-      // Expanded Multi-Operator Stop Resolution
+      // Global Spatial Fallback for Joint Route Stops
       if (isJoint) {
-        if (!ctbId && currentSelectedRoute.ctbStopsDetailed) {
-          let minD = 0.006; // Expanded 600m threshold
-          let bestMatch = null;
-          let bestScore = -1;
+        if (!ctbId && stop.lat && stop.long) {
+          let bestGlobalId = null;
+          let bestGlobalScore = -1;
+          const kName = cleanStopName(stop.name_tc);
 
-          currentSelectedRoute.ctbStopsDetailed.forEach(cS => {
-            const dist = getGpsDistance(stop, cS);
-            const sim = stringSimilarity(cleanStopName(stop.name_tc), cleanStopName(cS.name_tc));
-            const score = (dist < 0.005 ? 0.5 : 0) + sim;
-            if (score > bestScore) {
-              bestScore = score;
-              bestMatch = cS;
+          for (const [cId, info] of ctbStopMap.entries()) {
+            if (info.lat != null && info.long != null) {
+              const dist = getHaversineDistanceKm(stop.lat, stop.long, info.lat, info.long);
+              if (dist < 0.3) { // 300m radius
+                const cName = cleanStopName(info.name_tc);
+                const sim = stringSimilarity(kName, cName);
+                const score = (dist < 0.15 ? 0.5 : 0.2) + sim;
+                if (score > bestGlobalScore) {
+                  bestGlobalScore = score;
+                  bestGlobalId = cId;
+                }
+              }
             }
-          });
-          if (bestMatch && bestScore > 0.3) {
-            ctbId = bestMatch.stopId;
+          }
+          if (bestGlobalId && bestGlobalScore >= 0.3) {
+            ctbId = bestGlobalId;
           }
         }
 
-        if (!kmbId && currentSelectedRoute.kmbStopsDetailed) {
-          let minD = 0.006;
-          let bestMatch = null;
-          let bestScore = -1;
+        if (!kmbId && stop.lat && stop.long) {
+          let bestGlobalId = null;
+          let bestGlobalScore = -1;
+          const cName = cleanStopName(stop.name_tc);
 
-          currentSelectedRoute.kmbStopsDetailed.forEach(kS => {
-            const dist = getGpsDistance(stop, kS);
-            const sim = stringSimilarity(cleanStopName(stop.name_tc), cleanStopName(kS.name_tc));
-            const score = (dist < 0.005 ? 0.5 : 0) + sim;
-            if (score > bestScore) {
-              bestScore = score;
-              bestMatch = kS;
+          for (const [kId, info] of kmbStopMap.entries()) {
+            if (info.lat != null && info.long != null) {
+              const dist = getHaversineDistanceKm(stop.lat, stop.long, info.lat, info.long);
+              if (dist < 0.3) {
+                const kName = cleanStopName(info.name_tc);
+                const sim = stringSimilarity(cName, kName);
+                const score = (dist < 0.15 ? 0.5 : 0.2) + sim;
+                if (score > bestGlobalScore) {
+                  bestGlobalScore = score;
+                  bestGlobalId = kId;
+                }
+              }
             }
-          });
-          if (bestMatch && bestScore > 0.3) {
-            kmbId = bestMatch.stopId;
+          }
+          if (bestGlobalId && bestGlobalScore >= 0.3) {
+            kmbId = bestGlobalId;
           }
         }
       }
@@ -1449,7 +1459,6 @@
 
     function startAutoRefresh() {
       stopAutoRefresh();
-      // Shortened Live Refresh Rate (3000ms = 3 seconds)
       autoRefreshTimer = setInterval(() => {
         if (currentOriginStop) fetchETAAndTravelTime(true);
       }, 3000);
