@@ -249,6 +249,26 @@
       return R * c;
     }
 
+    function findNearestStopId(lat, long, company) {
+      if (lat == null || long == null) return null;
+      const targetMap = (company === 'CTB') ? ctbStopMap : kmbStopMap;
+      let minDist = 0.005; // ~500 meters threshold
+      let nearestId = null;
+
+      for (const [stopId, info] of targetMap.entries()) {
+        if (info.lat != null && info.long != null) {
+          const dLat = info.lat - lat;
+          const dLong = info.long - long;
+          const dist = Math.sqrt(dLat * dLat + dLong * dLong);
+          if (dist < minDist) {
+            minDist = dist;
+            nearestId = stopId;
+          }
+        }
+      }
+      return nearestId;
+    }
+
     function isLwbRoute(routeNum) {
       if (!routeNum) return false;
       const r = String(routeNum).trim().toUpperCase();
@@ -889,36 +909,55 @@
           let score = stringSimilarity(kClean, cClean);
           const dist = getGpsDistance(kStop, cStop);
 
-          if (dist < 0.003) {
-            score += 0.4;
+          if (dist < 0.0035) { // within 350m
+            score += 0.5;
           }
 
-          if (score > bestScore && score > 0.25) {
+          if (score > bestScore && score > 0.2) {
             bestScore = score;
             bestCtbIdx = cIdx;
           }
         });
 
+        let ctbId = null;
+        let ctbNameEn = null;
+        let ctbLat = null;
+        let ctbLong = null;
+
         if (bestCtbIdx !== -1) {
           usedCtbIndices.add(bestCtbIdx);
-          return {
-            seq: kStop.seq,
-            name_tc: kStop.name_tc,
-            name_en: kStop.name_en || ctbStops[bestCtbIdx].name_en,
-            kmbStopId: kStop.stopId,
-            ctbStopId: ctbStops[bestCtbIdx].stopId,
-            lat: kStop.lat || ctbStops[bestCtbIdx].lat,
-            long: kStop.long || ctbStops[bestCtbIdx].long
-          };
+          ctbId = ctbStops[bestCtbIdx].stopId;
+          ctbNameEn = ctbStops[bestCtbIdx].name_en;
+          ctbLat = ctbStops[bestCtbIdx].lat;
+          ctbLong = ctbStops[bestCtbIdx].long;
+        } else if (kStop.lat && kStop.long) {
+          let minDist = 0.005; // 500m spatial search fallback
+          let nearestCtbIdx = -1;
+          ctbStops.forEach((cStop, cIdx) => {
+            if (usedCtbIndices.has(cIdx)) return;
+            const dist = getGpsDistance(kStop, cStop);
+            if (dist < minDist) {
+              minDist = dist;
+              nearestCtbIdx = cIdx;
+            }
+          });
+          if (nearestCtbIdx !== -1) {
+            usedCtbIndices.add(nearestCtbIdx);
+            ctbId = ctbStops[nearestCtbIdx].stopId;
+            ctbNameEn = ctbStops[nearestCtbIdx].name_en;
+            ctbLat = ctbStops[nearestCtbIdx].lat;
+            ctbLong = ctbStops[nearestCtbIdx].long;
+          }
         }
 
         return {
           seq: kStop.seq,
           name_tc: kStop.name_tc,
-          name_en: kStop.name_en,
+          name_en: kStop.name_en || ctbNameEn,
           kmbStopId: kStop.stopId,
-          lat: kStop.lat,
-          long: kStop.long
+          ctbStopId: ctbId,
+          lat: kStop.lat || ctbLat,
+          long: kStop.long || ctbLong
         };
       });
 
@@ -941,27 +980,15 @@
         }
       }
 
-      const cleanOrig = cleanStopName(origTc);
-      const cleanDest = cleanStopName(destTc);
-      const itemDestClean = item.dest_tc ? cleanStopName(item.dest_tc) : '';
-
-      if (cleanOrig && cleanDest && cleanOrig !== cleanDest && itemDestClean) {
-        if ((itemDestClean.includes(cleanOrig) || cleanOrig.includes(itemDestClean)) &&
-            !(itemDestClean.includes(cleanDest) || cleanDest.includes(itemDestClean))) {
-          return false;
-        }
-      }
-
       const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
-      const offServiceKeywords = [
+      const hardOffKeywords = [
         '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
         '服務已結束', '服務結束', '非服務時間', '非營運時間', '非營運時段', '暫停服務', '未有班次', '班次未定',
         '已過總站', '已駛離', '已開出',
-        'last bus passed', 'last bus departed', 'end of service', 'out of service', 'service ended', 'no service',
-        '九巴班次', '城巴班次', '龍運班次', '新巴班次', 'kmb schedule', 'ctb schedule'
+        'last bus passed', 'last bus departed', 'end of service', 'out of service', 'service ended', 'no service'
       ];
 
-      for (const kw of offServiceKeywords) {
+      for (const kw of hardOffKeywords) {
         if (rmk.includes(kw)) {
           return false;
         }
@@ -1151,27 +1178,41 @@
     async function fetchStopRawEtas(stop) {
       let fetchPromises = [];
       const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
+      const isJoint = currentSelectedRoute.companies.length > 1 || isJointRouteNumber(currentSelectedRoute.route);
 
-      if (stop.kmbStopId) {
+      let kmbId = stop.kmbStopId;
+      let ctbId = stop.ctbStopId;
+
+      // Dynamic GPS pairing fallback for joint routes
+      if (isJoint) {
+        if (!kmbId && stop.lat && stop.long) {
+          kmbId = findNearestStopId(stop.lat, stop.long, 'KMB');
+        }
+        if (!ctbId && stop.lat && stop.long) {
+          ctbId = findNearestStopId(stop.lat, stop.long, 'CTB');
+        }
+      }
+
+      if (kmbId) {
         const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
         const serviceType = currentSelectedRoute.serviceType || '1';
         
         fetchPromises.push(
-          fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${serviceType}`, {}, 6000, 2)
+          fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/${serviceType}`, {}, 6000, 2)
             .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
         );
 
         if (serviceType !== '1') {
           fetchPromises.push(
-            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/1`, {}, 6000, 2)
+            fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/1`, {}, 6000, 2)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
           );
         }
       }
 
-      if (stop.ctbStopId) {
+      if (ctbId) {
         fetchPromises.push(
-          fetchWithRetry(`${CTB_BASE}/eta/CTB/${stop.ctbStopId}/${currentSelectedRoute.route}`, {}, 6000, 2)
+          fetchWithRetry(`${CTB_BASE}/eta/CTB/${ctbId}/${currentSelectedRoute.route}`, {}, 6000, 2)
             .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
         );
       }
@@ -1276,7 +1317,7 @@
           });
         }
 
-        // --- Recalibrated Realistic Inter-Stop Travel Time Calculation ---
+        // Inter-Stop Travel Time Calculation
         if (currentDestStop) {
           const origIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentOriginStop.displaySeq || currentOriginStop.seq));
           const destIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentDestStop.displaySeq || currentDestStop.seq));
@@ -1290,25 +1331,22 @@
               const s2 = currentRenderedStops[i+1];
               const rawDist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
               
-              // Apply 1.35x Road Winding & Circuity Multiplier to straight-line distance
               const roadDist = rawDist ? (rawDist * 1.35) : null;
 
               if (roadDist && roadDist > 0.05) {
                 if (roadDist > 2.5) {
-                  totalSegMins += (roadDist / 45.0) * 60; // Expressway / Tunnel speed profile (45 km/h)
+                  totalSegMins += (roadDist / 45.0) * 60;
                 } else if (roadDist > 1.2) {
-                  totalSegMins += (roadDist / 28.0) * 60; // Suburban speed profile (28 km/h)
+                  totalSegMins += (roadDist / 28.0) * 60;
                 } else {
-                  totalSegMins += (roadDist / 14.0) * 60; // Urban street speed profile (14 km/h)
+                  totalSegMins += (roadDist / 14.0) * 60;
                 }
               } else {
-                totalSegMins += 2.2; // Baseline segment physical travel floor
+                totalSegMins += 2.2;
               }
 
-              // Base dwell / signal allowance per stop (0.7 mins = 42 seconds)
               totalSegMins += 0.7;
 
-              // Major Interchange / Tunnel Toll Plaza Dwell Buffer (+1.2 mins extra)
               const stopName = (s2?.name_tc || '') + ' ' + (s2?.name_en || '');
               if (/轉車站|巴士轉乘|收費廣場|過海隧道|Tunnel|Interchange|Terminus|總站/i.test(stopName)) {
                 totalSegMins += 1.2;
@@ -1317,7 +1355,6 @@
 
             let calculatedMins = Math.max(Math.ceil(stopCount * 2.0), Math.round(totalSegMins));
 
-            // Optional: Live ETA verification for close stops (<= 5 stops) with strict physical floor
             if (stopCount <= 5 && uniqueOrigEtas.length > 0) {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
               const formattedDestEtas = rawDestEtas
@@ -1325,7 +1362,7 @@
                 .map(item => ({ company: (item.co || '').toUpperCase(), rawTime: parseEtaToDate(item, now)?.getTime() || 0 }))
                 .filter(item => item.rawTime > 0);
 
-              const minPhysicalMs = Math.max(90000, stopCount * 90000); // Minimum 1.5 mins per stop floor
+              const minPhysicalMs = Math.max(90000, stopCount * 90000);
               const maxMs = stopCount * 360000;
 
               for (const oEta of uniqueOrigEtas) {
