@@ -257,205 +257,56 @@
       return /^(A\d|E\d|NA\d|S\d|R\d|N30|N31|N39|N42|N64|X33|X34|X36|X43|X47)/.test(r);
     }
 
-    function isHongKongPublicHoliday(date) {
-      const y = date.getFullYear();
-      const m = date.getMonth() + 1;
-      const d = date.getDate();
-      const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-
-      const hkHolidays = new Set([
-        '2026-01-01', '2026-02-17', '2026-02-18', '2026-02-19', '2026-04-03', '2026-04-04', 
-        '2026-04-06', '2026-05-01', '2026-05-25', '2026-06-19', '2026-07-01', '2026-09-26', 
-        '2026-10-01', '2026-10-19', '2026-12-25', '2026-12-26',
-        '2027-01-01', '2027-02-06', '2027-02-07', '2027-02-08', '2027-03-26', '2027-03-27', 
-        '2027-03-29', '2027-04-05', '2027-05-01', '2027-05-13', '2027-06-09', '2027-07-01', 
-        '2027-09-16', '2027-10-01', '2027-10-08', '2027-12-25', '2027-12-27'
-      ]);
-
-      return hkHolidays.has(dateStr);
-    }
-
-    function isSundayOrPublicHoliday(date = new Date()) {
-      return date.getDay() === 0 || isHongKongPublicHoliday(date);
-    }
-
-    function getHkScheduleStatus(date = new Date()) {
-      const isSunPH = isSundayOrPublicHoliday(date);
-      const isSat = date.getDay() === 6 && !isHongKongPublicHoliday(date);
-      const isWeekday = date.getDay() >= 1 && date.getDay() <= 5 && !isHongKongPublicHoliday(date);
-      const hour = date.getHours();
-
-      const centralPedActive = (isSunPH && hour >= 7) || (isSat && hour >= 20);
-      const cwbPedActive = (isSat || isSunPH) && (hour >= 12);
-      const stanleyPedActive = isSunPH && (hour >= 11 && hour < 18);
-
-      return {
-        isSunPH,
-        isSat,
-        isWeekday,
-        hour,
-        centralPedActive,
-        cwbPedActive,
-        stanleyPedActive
-      };
-    }
-
-    function filterSpecialDayAndZoneStops(stops, date = new Date()) {
-      const status = getHkScheduleStatus(date);
-
-      const hasCentralNormal = stops.some(s => 
-        /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test((s.name_tc || '') + ' ' + (s.name_en || '')) ||
-        ['001032', '001033', '001034'].includes(s.ctbStopId || '')
-      );
-      const hasCentralDiversion = stops.some(s => 
-        /遮打花園|歷山大廈|置地廣場|Chater Garden|Alexandra House|Landmark/i.test((s.name_tc || '') + ' ' + (s.name_en || '')) ||
-        ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(s.ctbStopId || '')
-      );
-
-      const hasCwbNormal = stops.some(s => 
-        /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
-      );
-      const hasCwbDiversion = stops.some(s => 
-        /邊寧頓街|Pennington/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
-      );
-
-      const hasStanleyNormal = stops.some(s => 
-        /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
-      );
-      const hasStanleyDiversion = stops.some(s => 
-        /赤柱村|Stanley Village/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
-      );
-
-      return stops.filter(s => {
-        const nameTc = s.name_tc || '';
-        const nameEn = s.name_en || '';
-        const fullName = `${nameTc} ${nameEn}`;
-        const ctbId = s.ctbStopId || '';
-
-        const isCentralNormalStop = /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test(fullName) || ['001032', '001033', '001034'].includes(ctbId);
-        const isCentralDivStop = /遮打花園|歷山大廈|置地廣場|Chater Garden|Alexandra House|Landmark/i.test(fullName) || ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(ctbId);
-
-        if (hasCentralNormal && hasCentralDiversion) {
-          if (status.centralPedActive) {
-            if (isCentralNormalStop) return false;
-          } else {
-            if (isCentralDivStop) return false;
-          }
-        }
-
-        const isCwbNormalStop = /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test(fullName);
-        const isCwbDivStop = /邊寧頓街|Pennington/i.test(fullName);
-
-        if (hasCwbNormal && hasCwbDiversion) {
-          if (status.cwbPedActive) {
-            if (isCwbNormalStop) return false;
-          } else {
-            if (isCwbDivStop) return false;
-          }
-        }
-
-        const isStanleyNormalStop = /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test(fullName);
-        const isStanleyDivStop = /赤柱村|Stanley Village/i.test(fullName);
-
-        if (hasStanleyNormal && hasStanleyDiversion && (isStanleyNormalStop || isStanleyDivStop)) {
-          if (status.stanleyPedActive) {
-            if (isStanleyNormalStop) return false;
-          } else {
-            if (isStanleyDivStop) return false;
-          }
-        }
-
-        if (/只限星期日及公眾假期|只限假日|星期日及公眾假期特別|Sundays? & Public Holidays? Only|Sundays? and Public Holidays? Only/i.test(fullName)) {
-          if (!status.isSunPH) return false;
-        }
-
-        if (/只限星期一至五|星期一至五（?公眾假期除外）?|Mon(day)?-Fri(day)? Only/i.test(fullName)) {
-          if (!status.isWeekday) return false;
-        }
-
-        if (/只限星期六[、, ]日及公眾假期|星期六[、, ]日及公眾假期|Saturdays?,? Sundays? & Public Holidays? Only/i.test(fullName)) {
-          if (status.isWeekday) return false;
-        }
-
-        if (/假日改道|假日特別|Holiday Diversion|Holiday Special/i.test(fullName)) {
-          if (!status.isSunPH) return false;
-        }
-
-        if (/假日不經|假日暫停|Bypassed on Holidays|Suspended on Holidays/i.test(fullName)) {
-          if (status.isSunPH) return false;
-        }
-
-        if (/平日改道|平日特別|Weekday Diversion|Weekday Special/i.test(fullName)) {
-          if (!status.isWeekday) return false;
-        }
-
-        if (/平日不經|平日暫停|Bypassed on Weekdays/i.test(fullName)) {
-          if (status.isWeekday) return false;
-        }
-
-        if (/只限繁忙時間|晨早特別班次|特別班次|只限上課日|Peak Hours? Only|Morning Peak Only|School Days? Only/i.test(fullName)) {
-          if (!status.isWeekday) return false;
-          const isMorningPeak = status.hour >= 7 && status.hour < 10;
-          const isEveningPeak = status.hour >= 17 && status.hour < 20;
-          if (!isMorningPeak && !isEveningPeak) return false;
-        }
-
-        return true;
-      });
-    }
-
-    async function fetchWithRetry(url, options = {}, timeoutMs = 8000, retries = 2) {
-      const fetchOpts = { ...options, cache: 'no-store' };
-      for (let i = 0; i < retries; i++) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          const response = await fetch(url, { ...fetchOpts, signal: controller.signal });
-          clearTimeout(timer);
-          if (response.ok) {
-            const json = await response.json();
-            if (json) return json;
-          }
-        } catch (e) {
-          clearTimeout(timer);
-        }
-        if (i < retries - 1) {
-          await new Promise(res => setTimeout(res, 300));
-        }
-      }
-      return null;
-    }
-
     function cleanStopName(name) {
       if (!name) return '';
       return String(name)
         .replace(/（.*?）|\(.*?\)|【.*?】/g, '')
         .replace(/巴士總站|巴士站|總站|分站|車站|特別班次|循環線|轉乘站|轉車站|市中心|廣場|大廈|商場|碼頭|邨|屋邨|公園|花園|鐵路站|港鐵站|收費廣場|過海隧道|對面|近|旁|Bus Terminus|Station/gi, '')
         .replace(/[，, \-_  \/\(\)]/g, '')
+        .toLowerCase()
         .trim();
     }
 
-    function stringSimilarity(s1, s2) {
-      if (!s1 || !s2) return 0;
-      if (s1 === s2) return 1.0;
-      if (s1.includes(s2) || s2.includes(s1)) return 0.85;
+    // Advanced Universal Bilingual Stop Name Matcher
+    function getStopNameSimilarity(name1, name2) {
+      if (!name1 || !name2) return 0;
       
-      let matches = 0;
-      const set2 = new Set(s2.split(''));
-      for (const char of s1) {
-        if (set2.has(char)) matches++;
-      }
-      return matches / Math.max(s1.length, s2.length);
-    }
+      const n1 = String(name1).toLowerCase().trim();
+      const n2 = String(name2).toLowerCase().trim();
+      if (n1 === n2) return 1.0;
 
-    function normalizeDir(d) {
-      if (!d) return '';
-      const s = String(d).trim().toUpperCase();
-      if (s === 'O' || s === 'OUTBOUND' || s === 'OUT' || s === '1') return 'O';
-      if (s === 'I' || s === 'INBOUND' || s === 'IN' || s === '2') return 'I';
-      if (s.startsWith('O')) return 'O';
-      if (s.startsWith('I')) return 'I';
-      return s;
+      const c1 = cleanStopName(n1);
+      const c2 = cleanStopName(n2);
+      if (c1 === c2) return 1.0;
+      if (!c1 || !c2) return 0;
+
+      // Substring inclusion check (e.g. "秀程樓" vs "秀程樓, 秀茂坪道" or "SAU CHING HOUSE" vs "SAU CHING HOUSE, SAU MAU PING ROAD")
+      if (c1.includes(c2) || c2.includes(c1)) {
+        const minLen = Math.min(c1.length, c2.length);
+        if (minLen >= 2) return 0.90;
+      }
+
+      // Word Token Overlap for English / Chinese phrases
+      const tokens1 = n1.replace(/[^\w\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(t => t.length > 1);
+      const tokens2 = n2.replace(/[^\w\u4e00-\u9fa5]/g, ' ').split(/\s+/).filter(t => t.length > 1);
+
+      if (tokens1.length > 0 && tokens2.length > 0) {
+        let common = 0;
+        const set2 = new Set(tokens2);
+        tokens1.forEach(t => { if (set2.has(t)) common++; });
+        
+        const minTokens = Math.min(tokens1.length, tokens2.length);
+        const tokenScore = common / minTokens;
+        if (tokenScore >= 0.75 && minTokens >= 1) return 0.85;
+      }
+
+      // Character overlap ratio
+      let charMatches = 0;
+      const set2 = new Set(c2.split(''));
+      for (const char of c1) {
+        if (set2.has(char)) charMatches++;
+      }
+      return charMatches / Math.min(c1.length, c2.length);
     }
 
     function isJointRouteNumber(routeNum) {
@@ -482,6 +333,28 @@
       const crossMatch2 = (cDest1 && cOrig2 && (cDest1.includes(cOrig2) || cDest2.includes(cOrig1)));
 
       return origMatch || destMatch || crossMatch1 || crossMatch2;
+    }
+
+    async function fetchWithRetry(url, options = {}, timeoutMs = 8000, retries = 2) {
+      const fetchOpts = { ...options, cache: 'no-store' };
+      for (let i = 0; i < retries; i++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, { ...fetchOpts, signal: controller.signal });
+          clearTimeout(timer);
+          if (response.ok) {
+            const json = await response.json();
+            if (json) return json;
+          }
+        } catch (e) {
+          clearTimeout(timer);
+        }
+        if (i < retries - 1) {
+          await new Promise(res => setTimeout(res, 300));
+        }
+      }
+      return null;
     }
 
     async function preloadKmbStops() {
@@ -557,13 +430,6 @@
         }
       }
       return { name_tc: `巴士站 ${stopId}`, name_en: `Bus Stop ${stopId}`, lat: null, long: null };
-    }
-
-    function getGpsDistance(s1, s2) {
-      if (!s1 || !s2 || s1.lat == null || s1.long == null || s2.lat == null || s2.long == null) return Infinity;
-      const dLat = s1.lat - s2.lat;
-      const dLong = s1.long - s2.long;
-      return Math.sqrt(dLat * dLat + dLong * dLong);
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -852,7 +718,7 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
-    // Flexible Non-Greedy Joint Route Stop Matcher
+    // Universal Non-Greedy Joint Stop Matcher using Substring/Token Alignment
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -880,27 +746,28 @@
 
       const usedCtbIndices = new Set();
       const matched = kmbStops.map((kStop, kIdx) => {
-        const kClean = cleanStopName(kStop.name_tc);
         let bestCtbIdx = -1;
         let bestScore = -1;
 
         ctbStops.forEach((cStop, cIdx) => {
           if (usedCtbIndices.has(cIdx)) return;
 
-          const cClean = cleanStopName(cStop.name_tc);
-          let score = stringSimilarity(kClean, cClean);
-          const dist = getGpsDistance(kStop, cStop);
+          const simTc = getStopNameSimilarity(kStop.name_tc, cStop.name_tc);
+          const simEn = getStopNameSimilarity(kStop.name_en, cStop.name_en);
+          let score = Math.max(simTc, simEn);
 
-          if (dist < 0.15) score += 0.6; // within 150m
-          else if (dist < 0.3) score += 0.35; // within 300m
-          else if (dist < 0.5) score += 0.15; // within 500m
+          const dist = getHaversineDistanceKm(kStop.lat, kStop.long, cStop.lat, cStop.long);
+
+          if (dist != null) {
+            if (dist < 0.15) score += 0.50; // within 150m
+            else if (dist < 0.35) score += 0.25; // within 350m
+          }
 
           const kRatio = kIdx / Math.max(1, kmbStops.length - 1);
           const cRatio = cIdx / Math.max(1, ctbStops.length - 1);
-          const ratioDiff = Math.abs(kRatio - cRatio);
-          if (ratioDiff < 0.2) score += 0.2;
+          if (Math.abs(kRatio - cRatio) < 0.20) score += 0.15;
 
-          if (score > bestScore && (score > 0.35 || dist < 0.25)) {
+          if (score > bestScore && (score >= 0.35 || (dist != null && dist < 0.3))) {
             bestScore = score;
             bestCtbIdx = cIdx;
           }
@@ -947,14 +814,10 @@
       const cleanItemDest = cleanStopName(rawDest);
 
       if (cleanItemDest && cleanOrig && cleanDest && cleanOrig !== cleanDest) {
-        const simToOrig = stringSimilarity(cleanItemDest, cleanOrig);
-        const simToDest = stringSimilarity(cleanItemDest, cleanDest);
+        const simToOrig = getStopNameSimilarity(cleanItemDest, cleanOrig);
+        const simToDest = getStopNameSimilarity(cleanItemDest, cleanDest);
 
-        if (simToOrig > simToDest && simToOrig >= 0.35) {
-          return false;
-        }
-
-        if (cleanOrig.length >= 2 && cleanItemDest.includes(cleanOrig) && !cleanItemDest.includes(cleanDest)) {
+        if (simToOrig > simToDest && simToOrig >= 0.40) {
           return false;
         }
       }
@@ -1010,6 +873,7 @@
         }
 
         if (route.companies.includes('CTB')) {
+          // Fetch CTB stops across both outbound and inbound directions to guarantee candidate coverage
           const [resOut, resIn] = await Promise.all([
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 6000, 2),
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 6000, 2)
@@ -1018,29 +882,34 @@
           const rawOut = (resOut && resOut.data) || [];
           const rawIn = (resIn && resIn.data) || [];
 
-          // Direction Selection by Empirical Overlap Score against KMB stops
           let matchCountOut = 0;
           let matchCountIn = 0;
 
           if (kmbStopsDetailed.length > 0) {
             rawOut.forEach(cS => {
-              if (kmbStopsDetailed.some(kS => getGpsDistance(kS, cS) < 0.003 || stringSimilarity(cleanStopName(kS.name_tc), cleanStopName(cS.name_tc)) > 0.6)) {
+              if (kmbStopsDetailed.some(kS => getStopNameSimilarity(kS.name_tc, cS.stop) > 0.4 || getStopNameSimilarity(kS.name_en, cS.stop) > 0.4)) {
                 matchCountOut++;
               }
             });
             rawIn.forEach(cS => {
-              if (kmbStopsDetailed.some(kS => getGpsDistance(kS, cS) < 0.003 || stringSimilarity(cleanStopName(kS.name_tc), cleanStopName(cS.name_tc)) > 0.6)) {
+              if (kmbStopsDetailed.some(kS => getStopNameSimilarity(kS.name_tc, cS.stop) > 0.4 || getStopNameSimilarity(kS.name_en, cS.stop) > 0.4)) {
                 matchCountIn++;
               }
             });
           }
 
-          let chosenRaw = (matchCountIn > matchCountOut) ? rawIn : rawOut;
-          if (chosenRaw.length === 0) chosenRaw = (matchCountOut > 0) ? rawOut : rawIn;
+          const primaryRaw = (matchCountIn > matchCountOut && rawIn.length > 0) ? rawIn : (rawOut.length > 0 ? rawOut : rawIn);
+          const secondaryRaw = (primaryRaw === rawOut) ? rawIn : rawOut;
+          
+          // Pool unique CTB route stops
+          const combinedRawCtb = [...primaryRaw];
+          secondaryRaw.forEach(s => {
+            if (!combinedRawCtb.some(p => p.stop === s.stop)) {
+              combinedRawCtb.push(s);
+            }
+          });
 
-          const sortedRawStops = [...chosenRaw].sort((a, b) => a.seq - b.seq);
-
-          ctbStopsDetailed = await Promise.all(sortedRawStops.map(async (s) => {
+          ctbStopsDetailed = await Promise.all(combinedRawCtb.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
             return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
           }));
@@ -1055,8 +924,6 @@
         } else if (ctbStopsDetailed.length > 0) {
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
-
-        finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
         currentRenderedStops = finalStops;
@@ -1183,53 +1050,64 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
-      // Global Spatial Fallback for Joint Route Stops
-      if (isJoint) {
-        if (!ctbId && stop.lat && stop.long) {
-          let bestGlobalId = null;
-          let bestGlobalScore = -1;
-          const kName = cleanStopName(stop.name_tc);
+      // Multi-Layer Universal Resolution Fallback
+      if (isJoint && !ctbId) {
+        // Tier 1: Search current route's detailed CTB stops pool using token similarity
+        if (currentSelectedRoute.ctbStopsDetailed && currentSelectedRoute.ctbStopsDetailed.length > 0) {
+          let bestRouteScore = -1;
+          let bestRouteCtb = null;
 
-          for (const [cId, info] of ctbStopMap.entries()) {
-            if (info.lat != null && info.long != null) {
-              const dist = getHaversineDistanceKm(stop.lat, stop.long, info.lat, info.long);
-              if (dist < 0.3) { // 300m radius
-                const cName = cleanStopName(info.name_tc);
-                const sim = stringSimilarity(kName, cName);
-                const score = (dist < 0.15 ? 0.5 : 0.2) + sim;
-                if (score > bestGlobalScore) {
-                  bestGlobalScore = score;
-                  bestGlobalId = cId;
-                }
-              }
+          currentSelectedRoute.ctbStopsDetailed.forEach(cS => {
+            const simTc = getStopNameSimilarity(stop.name_tc, cS.name_tc);
+            const simEn = getStopNameSimilarity(stop.name_en, cS.name_en);
+            let score = Math.max(simTc, simEn);
+
+            if (stop.lat != null && stop.long != null && cS.lat != null && cS.long != null) {
+              const dist = getHaversineDistanceKm(stop.lat, stop.long, cS.lat, cS.long);
+              if (dist < 0.2) score += 0.4;
+              else if (dist < 0.4) score += 0.2;
             }
-          }
-          if (bestGlobalId && bestGlobalScore >= 0.3) {
-            ctbId = bestGlobalId;
+
+            if (score > bestRouteScore) {
+              bestRouteScore = score;
+              bestRouteCtb = cS;
+            }
+          });
+
+          if (bestRouteCtb && bestRouteScore >= 0.35) {
+            ctbId = bestRouteCtb.stopId;
+            stop.ctbStopId = ctbId; // Cache dynamically
           }
         }
 
-        if (!kmbId && stop.lat && stop.long) {
+        // Tier 2: Search global pre-cached CTB stops map
+        if (!ctbId && ctbStopMap.size > 0) {
           let bestGlobalId = null;
           let bestGlobalScore = -1;
-          const cName = cleanStopName(stop.name_tc);
 
-          for (const [kId, info] of kmbStopMap.entries()) {
-            if (info.lat != null && info.long != null) {
+          for (const [cId, info] of ctbStopMap.entries()) {
+            const simTc = getStopNameSimilarity(stop.name_tc, info.name_tc);
+            const simEn = getStopNameSimilarity(stop.name_en, info.name_en);
+            let score = Math.max(simTc, simEn);
+
+            if (stop.lat != null && stop.long != null && info.lat != null && info.long != null) {
               const dist = getHaversineDistanceKm(stop.lat, stop.long, info.lat, info.long);
               if (dist < 0.3) {
-                const kName = cleanStopName(info.name_tc);
-                const sim = stringSimilarity(cName, kName);
-                const score = (dist < 0.15 ? 0.5 : 0.2) + sim;
-                if (score > bestGlobalScore) {
-                  bestGlobalScore = score;
-                  bestGlobalId = kId;
-                }
+                score += (dist < 0.15 ? 0.5 : 0.2);
+              } else {
+                score = 0; // Skip out of range
               }
             }
+
+            if (score > bestGlobalScore) {
+              bestGlobalScore = score;
+              bestGlobalId = cId;
+            }
           }
-          if (bestGlobalId && bestGlobalScore >= 0.3) {
-            kmbId = bestGlobalId;
+
+          if (bestGlobalId && bestGlobalScore >= 0.35) {
+            ctbId = bestGlobalId;
+            stop.ctbStopId = ctbId;
           }
         }
       }
