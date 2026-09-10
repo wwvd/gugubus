@@ -889,7 +889,7 @@
           let score = stringSimilarity(kClean, cClean);
           const dist = getGpsDistance(kStop, cStop);
 
-          if (dist < 0.003) { // within 300 meters
+          if (dist < 0.003) {
             score += 0.4;
           }
 
@@ -987,7 +987,6 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        // 1. Fetch KMB / LWB Stops
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
@@ -1004,7 +1003,6 @@
           }
         }
 
-        // 2. Fetch CTB Stops
         if (route.companies.includes('CTB')) {
           const ctbDir = route.dir === 'inbound' ? 'inbound' : 'outbound';
           const res = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${ctbDir}`, {}, 8000, 2);
@@ -1024,7 +1022,6 @@
           }));
         }
 
-        // 3. Merge Joint Stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
@@ -1032,7 +1029,6 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
-        // 4. Special Day / Zone Filtering
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
@@ -1280,7 +1276,7 @@
           });
         }
 
-        // Guaranteed Inter-Stop Travel Time Calculation
+        // --- Recalibrated Realistic Inter-Stop Travel Time Calculation ---
         if (currentDestStop) {
           const origIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentOriginStop.displaySeq || currentOriginStop.seq));
           const destIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentDestStop.displaySeq || currentDestStop.seq));
@@ -1292,24 +1288,36 @@
             for (let i = origIdx; i < destIdx; i++) {
               const s1 = currentRenderedStops[i];
               const s2 = currentRenderedStops[i+1];
-              const dist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
+              const rawDist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
+              
+              // Apply 1.35x Road Winding & Circuity Multiplier to straight-line distance
+              const roadDist = rawDist ? (rawDist * 1.35) : null;
 
-              if (dist && dist > 0.05) {
-                if (dist > 2.5) {
-                  totalSegMins += (dist / 55.0) * 60;
-                } else if (dist > 1.2) {
-                  totalSegMins += (dist / 35.0) * 60;
+              if (roadDist && roadDist > 0.05) {
+                if (roadDist > 2.5) {
+                  totalSegMins += (roadDist / 45.0) * 60; // Expressway / Tunnel speed profile (45 km/h)
+                } else if (roadDist > 1.2) {
+                  totalSegMins += (roadDist / 28.0) * 60; // Suburban speed profile (28 km/h)
                 } else {
-                  totalSegMins += (dist / 18.0) * 60;
+                  totalSegMins += (roadDist / 14.0) * 60; // Urban street speed profile (14 km/h)
                 }
               } else {
-                totalSegMins += 1.5;
+                totalSegMins += 2.2; // Baseline segment physical travel floor
               }
-              totalSegMins += 0.4;
+
+              // Base dwell / signal allowance per stop (0.7 mins = 42 seconds)
+              totalSegMins += 0.7;
+
+              // Major Interchange / Tunnel Toll Plaza Dwell Buffer (+1.2 mins extra)
+              const stopName = (s2?.name_tc || '') + ' ' + (s2?.name_en || '');
+              if (/轉車站|巴士轉乘|收費廣場|過海隧道|Tunnel|Interchange|Terminus|總站/i.test(stopName)) {
+                totalSegMins += 1.2;
+              }
             }
 
-            let calculatedMins = Math.max(1, Math.round(totalSegMins));
+            let calculatedMins = Math.max(Math.ceil(stopCount * 2.0), Math.round(totalSegMins));
 
+            // Optional: Live ETA verification for close stops (<= 5 stops) with strict physical floor
             if (stopCount <= 5 && uniqueOrigEtas.length > 0) {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
               const formattedDestEtas = rawDestEtas
@@ -1317,17 +1325,17 @@
                 .map(item => ({ company: (item.co || '').toUpperCase(), rawTime: parseEtaToDate(item, now)?.getTime() || 0 }))
                 .filter(item => item.rawTime > 0);
 
-              const minMs = Math.max(30000, stopCount * 30000);
-              const maxMs = stopCount * 300000;
+              const minPhysicalMs = Math.max(90000, stopCount * 90000); // Minimum 1.5 mins per stop floor
+              const maxMs = stopCount * 360000;
 
               for (const oEta of uniqueOrigEtas) {
                 const match = formattedDestEtas.find(dEta => {
                   const diff = dEta.rawTime - oEta.rawTime;
-                  return diff >= minMs && diff <= maxMs;
+                  return diff >= minPhysicalMs && diff <= maxMs;
                 });
                 if (match) {
                   const liveMins = Math.round((match.rawTime - oEta.rawTime) / 60000);
-                  if (liveMins >= 1) {
+                  if (liveMins >= Math.ceil(stopCount * 1.5)) {
                     calculatedMins = liveMins;
                     break;
                   }
