@@ -102,6 +102,7 @@
     let currentDestStop = null;
     let currentRenderedStops = [];
     let autoRefreshTimer = null;
+    let isFetchingEtaInFlight = false;
     let activeCompanyFilter = 'ALL';
     let kmbAllStopsLoaded = false;
     let ctbAllStopsLoaded = false;
@@ -403,7 +404,7 @@
       });
     }
 
-    async function fetchWithRetry(url, options = {}, timeoutMs = 12000, retries = 3) {
+    async function fetchWithRetry(url, options = {}, timeoutMs = 8000, retries = 2) {
       const fetchOpts = { ...options, cache: 'no-store' };
       for (let i = 0; i < retries; i++) {
         const controller = new AbortController();
@@ -419,7 +420,7 @@
           clearTimeout(timer);
         }
         if (i < retries - 1) {
-          await new Promise(res => setTimeout(res, 400));
+          await new Promise(res => setTimeout(res, 300));
         }
       }
       return null;
@@ -486,7 +487,7 @@
     async function preloadKmbStops() {
       if (kmbAllStopsLoaded) return;
       try {
-        const res = await fetchWithRetry(`${KMB_BASE}/stop`, {}, 15000, 2);
+        const res = await fetchWithRetry(`${KMB_BASE}/stop`, {}, 12000, 2);
         if (res && Array.isArray(res.data)) {
           res.data.forEach(s => {
             if (s.stop) {
@@ -508,7 +509,7 @@
     async function preloadCtbStops() {
       if (ctbAllStopsLoaded) return;
       try {
-        const res = await fetchWithRetry(`${CTB_BASE}/stop`, {}, 15000, 2);
+        const res = await fetchWithRetry(`${CTB_BASE}/stop`, {}, 12000, 2);
         if (res && Array.isArray(res.data)) {
           res.data.forEach(s => {
             if (s.stop) {
@@ -530,7 +531,7 @@
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 8000, 2);
+        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 6000, 2);
         if (res && res.data) {
           const info = { 
             name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
@@ -543,7 +544,7 @@
         }
       } else if (company === 'CTB') {
         if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 8000, 2);
+        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 6000, 2);
         if (res && res.data) {
           const info = { 
             name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
@@ -574,8 +575,8 @@
 
       try {
         const [kmbRes, ctbRes] = await Promise.all([
-          fetchWithRetry(`${KMB_BASE}/route`, {}, 15000, 3),
-          fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 12000, 3),
+          fetchWithRetry(`${KMB_BASE}/route`, {}, 12000, 3),
+          fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 10000, 3),
           preloadKmbStops(),
           preloadCtbStops()
         ]);
@@ -851,7 +852,6 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
-    // Monotonic Monitored Sequence Matching for Joint Route Stops
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -894,7 +894,6 @@
             score += 0.5;
           }
 
-          // Sequence ratio proximity bonus
           const kRatio = kIdx / Math.max(1, kmbStops.length - 1);
           const cRatio = cIdx / Math.max(1, ctbStops.length - 1);
           const ratioDiff = Math.abs(kRatio - cRatio);
@@ -943,7 +942,6 @@
       const hasEtaSeconds = typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond);
       if (!hasEtaString && !hasEtaSeconds) return false;
 
-      // --- Strict Destination Filtering to Eliminate Opposite Direction ETAs ---
       const cleanOrig = cleanStopName(origTc);
       const cleanDest = cleanStopName(destTc);
       const rawDest = (item.dest_tc || item.dest_en || '').trim();
@@ -953,18 +951,15 @@
         const simToOrig = stringSimilarity(cleanItemDest, cleanOrig);
         const simToDest = stringSimilarity(cleanItemDest, cleanDest);
 
-        // Reject if ETA's destination matches the current origin better than current destination
         if (simToOrig > simToDest && simToOrig >= 0.35) {
           return false;
         }
 
-        // Exact sub-string origin match guard
         if (cleanOrig.length >= 2 && cleanItemDest.includes(cleanOrig) && !cleanItemDest.includes(cleanDest)) {
           return false;
         }
       }
 
-      // Off-service & out-of-bounds keywords filter
       const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
       const hardOffKeywords = [
         '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
@@ -1003,7 +998,7 @@
           const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
           if (kmbConfig) {
-            const res = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/1`, {}, 8000, 2);
+            const res = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/1`, {}, 6000, 2);
             const rawStops = (res && res.data) || [];
 
             const sortedRawStops = [...rawStops].sort((a, b) => a.seq - b.seq);
@@ -1016,16 +1011,14 @@
         }
 
         if (route.companies.includes('CTB')) {
-          // Robust Direction Alignment for CTB
           const [resOut, resIn] = await Promise.all([
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 8000, 2)
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 6000, 2),
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 6000, 2)
           ]);
 
           const rawOut = (resOut && resOut.data) || [];
           const rawIn = (resIn && resIn.data) || [];
 
-          // Determine which CTB direction matches current target destination
           let chosenRaw = rawOut;
           if (rawOut.length > 0 && rawIn.length > 0) {
             const firstOutStopId = rawOut[0]?.stop;
@@ -1039,7 +1032,7 @@
             const simToDest = stringSimilarity(firstOutClean, destClean);
 
             if (simToDest > simToOrig && simToDest >= 0.3) {
-              chosenRaw = rawIn; // Outbound starts at destination, so Inbound matches current direction
+              chosenRaw = rawIn;
             }
           } else if (rawOut.length === 0 && rawIn.length > 0) {
             chosenRaw = rawIn;
@@ -1053,7 +1046,6 @@
           }));
         }
 
-        // Save detailed CTB stops to route context for spatial fallbacks
         currentSelectedRoute.kmbStopsDetailed = kmbStopsDetailed;
         currentSelectedRoute.ctbStopsDetailed = ctbStopsDetailed;
 
@@ -1191,27 +1183,44 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
-      // Dynamic fallback search strictly within current route's CTB/KMB stop list
+      // Expanded Multi-Operator Stop Resolution
       if (isJoint) {
-        if (!ctbId && stop.lat && stop.long && currentSelectedRoute.ctbStopsDetailed) {
-          let minD = 0.003; // ~300m threshold
+        if (!ctbId && currentSelectedRoute.ctbStopsDetailed) {
+          let minD = 0.006; // Expanded 600m threshold
+          let bestMatch = null;
+          let bestScore = -1;
+
           currentSelectedRoute.ctbStopsDetailed.forEach(cS => {
             const dist = getGpsDistance(stop, cS);
-            if (dist < minD) {
-              minD = dist;
-              ctbId = cS.stopId;
+            const sim = stringSimilarity(cleanStopName(stop.name_tc), cleanStopName(cS.name_tc));
+            const score = (dist < 0.005 ? 0.5 : 0) + sim;
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = cS;
             }
           });
+          if (bestMatch && bestScore > 0.3) {
+            ctbId = bestMatch.stopId;
+          }
         }
-        if (!kmbId && stop.lat && stop.long && currentSelectedRoute.kmbStopsDetailed) {
-          let minD = 0.003;
+
+        if (!kmbId && currentSelectedRoute.kmbStopsDetailed) {
+          let minD = 0.006;
+          let bestMatch = null;
+          let bestScore = -1;
+
           currentSelectedRoute.kmbStopsDetailed.forEach(kS => {
             const dist = getGpsDistance(stop, kS);
-            if (dist < minD) {
-              minD = dist;
-              kmbId = kS.stopId;
+            const sim = stringSimilarity(cleanStopName(stop.name_tc), cleanStopName(kS.name_tc));
+            const score = (dist < 0.005 ? 0.5 : 0) + sim;
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = kS;
             }
           });
+          if (bestMatch && bestScore > 0.3) {
+            kmbId = bestMatch.stopId;
+          }
         }
       }
 
@@ -1220,13 +1229,13 @@
         const serviceType = currentSelectedRoute.serviceType || '1';
         
         fetchPromises.push(
-          fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/${serviceType}`, {}, 6000, 2)
+          fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/${serviceType}`, {}, 4000, 2)
             .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
         );
 
         if (serviceType !== '1') {
           fetchPromises.push(
-            fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/1`, {}, 6000, 2)
+            fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/1`, {}, 4000, 2)
               .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
           );
         }
@@ -1234,7 +1243,7 @@
 
       if (ctbId) {
         fetchPromises.push(
-          fetchWithRetry(`${CTB_BASE}/eta/CTB/${ctbId}/${currentSelectedRoute.route}`, {}, 6000, 2)
+          fetchWithRetry(`${CTB_BASE}/eta/CTB/${ctbId}/${currentSelectedRoute.route}`, {}, 4000, 2)
             .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
         );
       }
@@ -1245,7 +1254,9 @@
 
     async function fetchETAAndTravelTime(isAutoRefresh = false) {
       if (!currentOriginStop) return;
+      if (isAutoRefresh && isFetchingEtaInFlight) return;
 
+      isFetchingEtaInFlight = true;
       const etaContainer = document.getElementById('etaContainer');
       const travelTimeText = document.getElementById('travelTimeText');
 
@@ -1263,7 +1274,7 @@
         const destTc = currentSelectedRoute.destTc;
         const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
 
-        // Fetch Origin ETAs
+        // Fetch Origin ETAs across all participating bus companies
         const rawOrigEtas = await fetchStopRawEtas(currentOriginStop);
         const formattedOrigEtas = rawOrigEtas
           .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
@@ -1299,8 +1310,10 @@
           }
         });
 
+        // Global sorting across all companies
         uniqueOrigEtas.sort((a, b) => a.rawTime - b.rawTime);
 
+        // Render top 3 overall arrival predictions
         const nextETAs = uniqueOrigEtas.slice(0, 3);
         etaContainer.innerHTML = '';
 
@@ -1339,7 +1352,7 @@
           });
         }
 
-        // --- Multi-Tier Inter-Stop Travel Time Calculation Engine ---
+        // Multi-Tier Inter-Stop Travel Time Calculation Engine
         if (currentDestStop) {
           const origIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentOriginStop.displaySeq || currentOriginStop.seq));
           const destIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentDestStop.displaySeq || currentDestStop.seq));
@@ -1348,7 +1361,6 @@
             const stopCount = destIdx - origIdx;
             let liveDeltaMins = null;
 
-            // Tier 1: Primary Live Telemetry Delta between Destination and Origin
             try {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
               const validDestEtas = rawDestEtas
@@ -1358,8 +1370,8 @@
                 .sort((a, b) => a - b);
 
               if (uniqueOrigEtas.length > 0 && validDestEtas.length > 0) {
-                const minAllowedMs = Math.max(120000, stopCount * 120000); // Floor 2 mins/stop
-                const maxAllowedMs = stopCount * 420000; // Max 7 mins/stop
+                const minAllowedMs = Math.max(120000, stopCount * 120000);
+                const maxAllowedMs = stopCount * 420000;
 
                 for (const oEta of uniqueOrigEtas) {
                   const oTime = oEta.rawTime;
@@ -1378,13 +1390,12 @@
                 }
               }
             } catch (e) {
-              console.warn("Live ETA delta calculation fallback to transit model", e);
+              console.warn("Live ETA delta fallback", e);
             }
 
             if (liveDeltaMins && liveDeltaMins >= Math.ceil(stopCount * 2.0)) {
               travelTimeText.textContent = t('travelTimeEstimate', { mins: liveDeltaMins, stops: stopCount });
             } else {
-              // Tier 2: Calibrated HK Bus Transit Routing Model
               let totalSegMins = 0;
 
               for (let i = origIdx; i < destIdx; i++) {
@@ -1392,36 +1403,32 @@
                 const s2 = currentRenderedStops[i+1];
                 const rawDist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
                 
-                // 1.45x Road curvature & flyover geometry factor
                 const roadDist = rawDist ? (rawDist * 1.45) : null;
 
                 if (roadDist && roadDist > 0.05) {
                   if (roadDist > 3.0) {
-                    totalSegMins += (roadDist / 40.0) * 60; // Highway / Expressway (~40 km/h)
+                    totalSegMins += (roadDist / 40.0) * 60;
                   } else if (roadDist > 1.5) {
-                    totalSegMins += (roadDist / 24.0) * 60; // Suburban Arterial (~24 km/h)
+                    totalSegMins += (roadDist / 24.0) * 60;
                   } else {
-                    totalSegMins += (roadDist / 12.0) * 60; // Dense Urban Street (~12 km/h)
+                    totalSegMins += (roadDist / 12.0) * 60;
                   }
                 } else {
-                  totalSegMins += 2.5; // Baseline stop-to-stop physical driving floor
+                  totalSegMins += 2.5;
                 }
 
-                // Dwell time + Traffic light wait per intermediate stop (1.3 mins = 78s)
                 totalSegMins += 1.3;
 
-                // Tunnel & Major Bottlenecks Buffer
                 const s2Name = (s2?.name_tc || '') + ' ' + (s2?.name_en || '');
                 if (/過海隧道|紅磡海底隧道|東區海底隧道|西區海底隧道|Cross Harbour Tunnel|Eastern Harbour Crossing|Western Harbour Crossing/i.test(s2Name)) {
-                  totalSegMins += 6.0; // Cross-harbour tunnel toll & queue buffer
+                  totalSegMins += 6.0;
                 } else if (/大欖隧道|大老山隧道|獅子山隧道|城門隧道|將軍澳隧道|尖山隧道|屯門赤鱲角|Tai Lam Tunnel|Tate's Cairn|Lion Rock|Shing Mun|Tseung Kwan O|Tsing Sha/i.test(s2Name)) {
-                  totalSegMins += 4.0; // Major HK Tunnel buffer
+                  totalSegMins += 4.0;
                 } else if (/轉車站|巴士轉乘|收費廣場|Interchange|Toll Plaza/i.test(s2Name)) {
-                  totalSegMins += 3.0; // Major Bus Interchange buffer
+                  totalSegMins += 3.0;
                 }
               }
 
-              // Strict floor: HK bus trips take at least 2.5 mins per stop gap
               const minimumFloorMins = Math.ceil(stopCount * 2.5);
               const finalMins = Math.max(minimumFloorMins, Math.round(totalSegMins));
 
@@ -1435,14 +1442,17 @@
         if (!isAutoRefresh) {
           etaContainer.innerHTML = `<span class="text-sm text-rose-600">${t('etaError')}</span>`;
         }
+      } finally {
+        isFetchingEtaInFlight = false;
       }
     }
 
     function startAutoRefresh() {
       stopAutoRefresh();
+      // Shortened Live Refresh Rate (3000ms = 3 seconds)
       autoRefreshTimer = setInterval(() => {
         if (currentOriginStop) fetchETAAndTravelTime(true);
-      }, 5000);
+      }, 3000);
     }
 
     function stopAutoRefresh() {
@@ -1450,6 +1460,7 @@
         clearInterval(autoRefreshTimer);
         autoRefreshTimer = null;
       }
+      isFetchingEtaInFlight = false;
     }
 
     function showRouteList() {
