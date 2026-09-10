@@ -130,8 +130,7 @@
         resetStops: "重置車站",
         fetchingEta: "查詢實時時間中...",
         calculatingTime: "計算車程時間中...",
-        travelTimeLive: "預計車程：約 {mins} 分鐘 ({stops} 個站) • 實時動態",
-        travelTimeFallback: "預計車程：約 {mins} 分鐘 ({stops} 個站) • 班次預估",
+        travelTimeEstimate: "預計車程：約 {mins} 分鐘 ({stops} 個站)",
         noEta: "暫無即時班次資料",
         etaError: "無法獲取實時數據",
         departing: "即將開出",
@@ -167,8 +166,7 @@
         resetStops: "Reset",
         fetchingEta: "Fetching real-time ETAs...",
         calculatingTime: "Calculating travel time...",
-        travelTimeLive: "Est. Travel Time: ~{mins} mins ({stops} stops) • Live",
-        travelTimeFallback: "Est. Travel Time: ~{mins} mins ({stops} stops) • Scheduled",
+        travelTimeEstimate: "Est. Travel Time: ~{mins} mins ({stops} stops)",
         noEta: "No real-time ETA available",
         etaError: "Failed to load ETA data",
         departing: "Departing",
@@ -546,13 +544,6 @@
           await Promise.all(batch.map(id => getStopDetail('CTB', id)));
         }
       }
-    }
-
-    function getGpsDistance(s1, s2) {
-      if (!s1 || !s2 || s1.lat == null || s1.long == null || s2.lat == null || s2.long == null) return Infinity;
-      const dLat = s1.lat - s2.lat;
-      const dLong = s1.long - s2.long;
-      return Math.sqrt(dLat * dLat + dLong * dLong);
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -1297,71 +1288,64 @@
           });
         }
 
-        // --- Enhanced Travel Time Calculation Engine ---
+        // Guaranteed Inter-Stop Travel Time Calculation
         if (currentDestStop) {
-          const origSeqNum = currentOriginStop.displaySeq || currentOriginStop.seq;
-          const destSeqNum = currentDestStop.displaySeq || currentDestStop.seq;
-          const stopCount = Math.max(1, destSeqNum - origSeqNum);
+          const origIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentOriginStop.displaySeq || currentOriginStop.seq));
+          const destIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentDestStop.displaySeq || currentDestStop.seq));
 
-          const rawDestEtas = await fetchStopRawEtas(currentDestStop);
-          const formattedDestEtas = rawDestEtas
-            .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
-            .map(item => {
-              const etaDate = parseEtaToDate(item, now);
-              let co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
-              if (routeIsLwb && co !== 'CTB') co = 'LWB';
-              return { company: co, rawTime: etaDate.getTime() };
-            });
+          if (origIdx !== -1 && destIdx !== -1 && destIdx > origIdx) {
+            const stopCount = destIdx - origIdx;
+            let totalSegMins = 0;
 
-          formattedDestEtas.sort((a, b) => a.rawTime - b.rawTime);
+            // Segment-by-Segment GPS Distance & Speed Profiling
+            for (let i = origIdx; i < destIdx; i++) {
+              const s1 = currentRenderedStops[i];
+              const s2 = currentRenderedStops[i+1];
+              const dist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
 
-          let travelDiffMins = null;
-          let isLiveEstimate = false;
+              if (dist && dist > 0.05) {
+                if (dist > 2.5) {
+                  totalSegMins += (dist / 55.0) * 60; // Expressway / Tunnel speed profile
+                } else if (dist > 1.2) {
+                  totalSegMins += (dist / 35.0) * 60; // Suburban speed profile
+                } else {
+                  totalSegMins += (dist / 18.0) * 60; // Urban street speed profile
+                }
+              } else {
+                totalSegMins += 1.5; // Baseline segment time
+              }
+              totalSegMins += 0.4; // Intermediate stop dwell time (24s)
+            }
 
-          // 1. Primary Method: Live Chronological Inter-Stop Transit Matching
-          if (uniqueOrigEtas.length > 0 && formattedDestEtas.length > 0) {
-            const minTimeMs = Math.max(45000, stopCount * 40000); // Minimum realistic physical transit duration
+            let calculatedMins = Math.max(1, Math.round(totalSegMins));
 
-            for (const oEta of uniqueOrigEtas) {
-              const matchingDest = formattedDestEtas.find(dEta => {
-                const isCoMatch = (oEta.company === dEta.company) || isJointRouteNumber(currentSelectedRoute.route);
-                const diff = dEta.rawTime - oEta.rawTime;
-                return isCoMatch && diff >= minTimeMs;
-              });
+            // Optional: Live ETA verification for close stops (<= 5 stops)
+            if (stopCount <= 5 && uniqueOrigEtas.length > 0) {
+              const rawDestEtas = await fetchStopRawEtas(currentDestStop);
+              const formattedDestEtas = rawDestEtas
+                .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
+                .map(item => ({ company: (item.co || '').toUpperCase(), rawTime: parseEtaToDate(item, now)?.getTime() || 0 }))
+                .filter(item => item.rawTime > 0);
 
-              if (matchingDest) {
-                const diffMs = matchingDest.rawTime - oEta.rawTime;
-                travelDiffMins = Math.round(diffMs / 60000);
-                if (travelDiffMins >= 1) {
-                  isLiveEstimate = true;
-                  break;
+              const minMs = Math.max(30000, stopCount * 30000);
+              const maxMs = stopCount * 300000;
+
+              for (const oEta of uniqueOrigEtas) {
+                const match = formattedDestEtas.find(dEta => {
+                  const diff = dEta.rawTime - oEta.rawTime;
+                  return diff >= minMs && diff <= maxMs;
+                });
+                if (match) {
+                  const liveMins = Math.round((match.rawTime - oEta.rawTime) / 60000);
+                  if (liveMins >= 1) {
+                    calculatedMins = liveMins;
+                    break;
+                  }
                 }
               }
             }
-          }
 
-          // 2. Secondary Fallback: GPS Distance & Stop Dwell Matrix
-          if (travelDiffMins === null || travelDiffMins <= 0) {
-            const distKm = getHaversineDistanceKm(
-              currentOriginStop.lat, currentOriginStop.long,
-              currentDestStop.lat, currentDestStop.long
-            );
-
-            if (distKm && distKm > 0.1) {
-              const driveTimeMins = (distKm / 20.0) * 60; // 20 km/h urban average speed
-              const dwellTimeMins = stopCount * 0.35;    // 20 sec dwell per stop
-              travelDiffMins = Math.max(1, Math.round(driveTimeMins + dwellTimeMins));
-            } else {
-              travelDiffMins = Math.max(1, Math.round(stopCount * 2.0)); // 2.0 mins per stop baseline
-            }
-            isLiveEstimate = false;
-          }
-
-          // Display Travel Time Result Banner
-          if (isLiveEstimate) {
-            travelTimeText.textContent = t('travelTimeLive', { mins: travelDiffMins, stops: stopCount });
-          } else {
-            travelTimeText.textContent = t('travelTimeFallback', { mins: travelDiffMins, stops: stopCount });
+            travelTimeText.textContent = t('travelTimeEstimate', { mins: calculatedMins, stops: stopCount });
           }
         }
 
