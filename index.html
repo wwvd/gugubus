@@ -94,11 +94,10 @@
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
 
-    let currentLang = 'zh'; // 'zh' or 'en'
+    let currentLang = 'zh';
     let allRoutes = [];
     let currentSelectedRoute = null;
     
-    // Two-Stop Selection State
     let currentOriginStop = null;
     let currentDestStop = null;
     let currentRenderedStops = [];
@@ -274,14 +273,14 @@
       const isWeekday = date.getDay() >= 1 && date.getDay() <= 5 && !isHongKongPublicHoliday(date);
       const hour = date.getHours();
 
-      // Central Chater Road Pedestrian Zone:
-      // Sun & Public Holidays: 07:00 - 24:00
-      // Sat: 20:00 - 24:00
+      // Central Chater Road Pedestrian Scheme (Sun & PH 07:00-24:00 | Sat 20:00-24:00)
       const centralPedActive = (isSunPH && hour >= 7) || (isSat && hour >= 20);
 
-      // Causeway Bay Pedestrian Zone (Lockhart Rd, East Point Rd, Kai Chiu Rd):
-      // Sat, Sun & Public Holidays: 12:00 (noon) - 24:00
+      // Causeway Bay Pedestrian Scheme (Sat, Sun & PH 12:00-24:00)
       const cwbPedActive = (isSat || isSunPH) && (hour >= 12);
+
+      // Stanley Main Street Scheme (Sun & PH 11:00-18:00)
+      const stanleyPedActive = isSunPH && (hour >= 11 && hour < 18);
 
       return {
         isSunPH,
@@ -289,20 +288,39 @@
         isWeekday,
         hour,
         centralPedActive,
-        cwbPedActive
+        cwbPedActive,
+        stanleyPedActive
       };
     }
 
-    // Contextual Pedestrian Zone & Special Schedule Stop Filter
     function filterSpecialDayAndZoneStops(stops, date = new Date()) {
       const status = getHkScheduleStatus(date);
 
-      // Pre-evaluate if the route stop list contains paired pedestrian zone / diversion stops
-      const hasCentralNormal = stops.some(s => /遮打道|冰廠街|Chater Road|Ice House/i.test((s.name_tc || '') + ' ' + (s.name_en || '')));
-      const hasCentralDiversion = stops.some(s => /歷山大廈.*德輔道|遮打大廈.*德輔道|皇后像廣場.*德輔道|Alexandra House.*Des Voeux|Chater House.*Des Voeux|Statue Square.*Des Voeux/i.test((s.name_tc || '') + ' ' + (s.name_en || '')));
+      // 1. Central Scheme Pairs
+      const hasCentralNormal = stops.some(s => 
+        /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test((s.name_tc || '') + ' ' + (s.name_en || '')) ||
+        ['001032', '001033', '001034'].includes(s.ctbStopId || '')
+      );
+      const hasCentralDiversion = stops.some(s => 
+        /遮打花園|歷山大廈|置地廣場|Chater Garden|Alexandra House|Landmark/i.test((s.name_tc || '') + ' ' + (s.name_en || '')) ||
+        ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(s.ctbStopId || '')
+      );
 
-      const hasCwbNormal = stops.some(s => /啟超道|百德新街|駱克道|東角道|Kai Chiu|Paterson|Lockhart|East Point/i.test((s.name_tc || '') + ' ' + (s.name_en || '')));
-      const hasCwbDiversion = stops.some(s => /邊寧頓街|Pennington/i.test((s.name_tc || '') + ' ' + (s.name_en || '')));
+      // 2. Causeway Bay Scheme Pairs
+      const hasCwbNormal = stops.some(s => 
+        /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
+      );
+      const hasCwbDiversion = stops.some(s => 
+        /邊寧頓街|Pennington/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
+      );
+
+      // 3. Stanley Scheme Pairs
+      const hasStanleyNormal = stops.some(s => 
+        /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
+      );
+      const hasStanleyDiversion = stops.some(s => 
+        /赤柱村|Stanley Village/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
+      );
 
       return stops.filter(s => {
         const nameTc = s.name_tc || '';
@@ -310,9 +328,9 @@
         const fullName = `${nameTc} ${nameEn}`;
         const ctbId = s.ctbStopId || '';
 
-        // --- 1. Central Chater Road Pedestrian Scheme ---
-        const isCentralNormalStop = /遮打道|冰廠街|Chater Road|Ice House/i.test(fullName) || ['001032', '001033', '001034'].includes(ctbId);
-        const isCentralDivStop = /歷山大廈.*德輔道|遮打大廈.*德輔道|皇后像廣場.*德輔道|Alexandra House.*Des Voeux|Chater House.*Des Voeux|Statue Square.*Des Voeux/i.test(fullName) || ['001035', '001036', '001037'].includes(ctbId);
+        // --- Central Scheme Check ---
+        const isCentralNormalStop = /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test(fullName) || ['001032', '001033', '001034'].includes(ctbId);
+        const isCentralDivStop = /遮打花園|歷山大廈|置地廣場|Chater Garden|Alexandra House|Landmark/i.test(fullName) || ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(ctbId);
 
         if (hasCentralNormal && hasCentralDiversion) {
           if (status.centralPedActive) {
@@ -320,12 +338,10 @@
           } else {
             if (isCentralDivStop) return false;
           }
-        } else if (isCentralNormalStop && status.centralPedActive) {
-          return false;
         }
 
-        // --- 2. Causeway Bay Pedestrian Scheme ---
-        const isCwbNormalStop = /啟超道|百德新街|駱克道|東角道|Kai Chiu|Paterson|Lockhart|East Point/i.test(fullName);
+        // --- Causeway Bay Scheme Check ---
+        const isCwbNormalStop = /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test(fullName);
         const isCwbDivStop = /邊寧頓街|Pennington/i.test(fullName);
 
         if (hasCwbNormal && hasCwbDiversion) {
@@ -334,12 +350,22 @@
           } else {
             if (isCwbDivStop) return false;
           }
-        } else if (isCwbNormalStop && status.cwbPedActive) {
-          return false;
         }
 
-        // --- 3. Calendar Day-of-Week Rules ---
-        if (/只限星期日及公眾假期|只限假日|Sundays? & Public Holidays? Only|Sundays? and Public Holidays? Only/i.test(fullName)) {
+        // --- Stanley Scheme Check ---
+        const isStanleyNormalStop = /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test(fullName);
+        const isStanleyDivStop = /赤柱村|Stanley Village/i.test(fullName);
+
+        if (hasStanleyNormal && hasStanleyDiversion && (isStanleyNormalStop || isStanleyDivStop)) {
+          if (status.stanleyPedActive) {
+            if (isStanleyNormalStop) return false;
+          } else {
+            if (isStanleyDivStop) return false;
+          }
+        }
+
+        // --- Universal Special Day Keywords Check ---
+        if (/只限星期日及公眾假期|只限假日|星期日及公眾假期特別|Sundays? & Public Holidays? Only|Sundays? and Public Holidays? Only/i.test(fullName)) {
           if (!status.isSunPH) return false;
         }
 
@@ -351,16 +377,24 @@
           if (status.isWeekday) return false;
         }
 
-        if (/假日改道|Holiday Diversion/i.test(fullName)) {
+        if (/假日改道|假日特別|Holiday Diversion|Holiday Special/i.test(fullName)) {
           if (!status.isSunPH) return false;
         }
 
-        if (/假日不經|假日暫停|Bypassed on Holidays/i.test(fullName)) {
+        if (/假日不經|假日暫停|Bypassed on Holidays|Suspended on Holidays/i.test(fullName)) {
           if (status.isSunPH) return false;
         }
 
-        // --- 4. Peak Hours / School Days ---
-        if (/只限繁忙時間|晨早特別班次|只限上課日|Peak Hours? Only|Morning Peak Only/i.test(fullName)) {
+        if (/平日改道|平日特別|Weekday Diversion|Weekday Special/i.test(fullName)) {
+          if (!status.isWeekday) return false;
+        }
+
+        if (/平日不經|平日暫停|Bypassed on Weekdays/i.test(fullName)) {
+          if (status.isWeekday) return false;
+        }
+
+        // --- Peak Hour / Morning Peak / School Day Special Stops ---
+        if (/只限繁忙時間|晨早特別班次|特別班次|只限上課日|Peak Hours? Only|Morning Peak Only|School Days? Only/i.test(fullName)) {
           if (!status.isWeekday) return false;
           const isMorningPeak = status.hour >= 7 && status.hour < 10;
           const isEveningPeak = status.hour >= 17 && status.hour < 20;
@@ -1004,7 +1038,7 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
-        // 4. Apply Special Days & Times Filtering
+        // 4. Apply Universal Special Days & Times Filtering
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
