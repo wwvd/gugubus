@@ -328,7 +328,7 @@
         const fullName = `${nameTc} ${nameEn}`;
         const ctbId = s.ctbStopId || '';
 
-        // --- Central Scheme Check ---
+        // Central Scheme Check
         const isCentralNormalStop = /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test(fullName) || ['001032', '001033', '001034'].includes(ctbId);
         const isCentralDivStop = /遮打花園|歷山大廈|置地廣場|Chater Garden|Alexandra House|Landmark/i.test(fullName) || ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(ctbId);
 
@@ -340,7 +340,7 @@
           }
         }
 
-        // --- Causeway Bay Scheme Check ---
+        // Causeway Bay Scheme Check
         const isCwbNormalStop = /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test(fullName);
         const isCwbDivStop = /邊寧頓街|Pennington/i.test(fullName);
 
@@ -352,7 +352,7 @@
           }
         }
 
-        // --- Stanley Scheme Check ---
+        // Stanley Scheme Check
         const isStanleyNormalStop = /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test(fullName);
         const isStanleyDivStop = /赤柱村|Stanley Village/i.test(fullName);
 
@@ -364,7 +364,7 @@
           }
         }
 
-        // --- Universal Special Day Keywords Check ---
+        // Universal Special Day Keywords Check
         if (/只限星期日及公眾假期|只限假日|星期日及公眾假期特別|Sundays? & Public Holidays? Only|Sundays? and Public Holidays? Only/i.test(fullName)) {
           if (!status.isSunPH) return false;
         }
@@ -393,7 +393,7 @@
           if (status.isWeekday) return false;
         }
 
-        // --- Peak Hour / Morning Peak / School Day Special Stops ---
+        // Peak Hour / Morning Peak / School Day Special Stops
         if (/只限繁忙時間|晨早特別班次|特別班次|只限上課日|Peak Hours? Only|Morning Peak Only|School Days? Only/i.test(fullName)) {
           if (!status.isWeekday) return false;
           const isMorningPeak = status.hour >= 7 && status.hour < 10;
@@ -447,6 +447,16 @@
         if (set2.has(char)) matches++;
       }
       return matches / Math.max(s1.length, s2.length);
+    }
+
+    function normalizeDir(d) {
+      if (!d) return '';
+      const s = String(d).trim().toUpperCase();
+      if (s === 'O' || s === 'OUTBOUND' || s === 'OUT' || s === '1') return 'O';
+      if (s === 'I' || s === 'INBOUND' || s === 'IN' || s === '2') return 'I';
+      if (s.startsWith('O')) return 'O';
+      if (s.startsWith('I')) return 'I';
+      return s;
     }
 
     function isJointRouteNumber(routeNum) {
@@ -939,25 +949,37 @@
       });
     }
 
-    function isValidRealtimeEta(item, targetBoundChar, now = new Date()) {
+    function isValidRealtimeEta(item, targetDirStr, origTc, destTc, now = new Date()) {
       if (!item) return false;
 
       const hasEtaString = item.eta && String(item.eta).trim() !== '';
       const hasEtaSeconds = typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond);
       if (!hasEtaString && !hasEtaSeconds) return false;
 
-      if (item.dir && targetBoundChar) {
-        const itemDirUpper = String(item.dir).trim().toUpperCase();
-        const targetUpper = String(targetBoundChar).trim().toUpperCase();
-        if (itemDirUpper !== targetUpper && 
-           !(itemDirUpper.startsWith('O') && targetUpper === 'O') && 
-           !(itemDirUpper.startsWith('I') && targetUpper === 'I')) {
+      // 1. Strict Direction Normalization & Matching
+      const targetNorm = normalizeDir(targetDirStr);
+      const itemDirNorm = normalizeDir(item.dir);
+
+      if (itemDirNorm && targetNorm) {
+        if (itemDirNorm !== targetNorm && itemDirNorm !== 'CIRCULAR') {
           return false;
         }
       }
 
+      // 2. Destination vs Origin Check (Double Safety Net against Opposite Direction)
+      const cleanOrig = cleanStopName(origTc);
+      const cleanDest = cleanStopName(destTc);
+      const itemDestClean = item.dest_tc ? cleanStopName(item.dest_tc) : '';
+
+      if (cleanOrig && cleanDest && cleanOrig !== cleanDest && itemDestClean) {
+        if ((itemDestClean.includes(cleanOrig) || cleanOrig.includes(itemDestClean)) &&
+            !(itemDestClean.includes(cleanDest) || cleanDest.includes(itemDestClean))) {
+          return false;
+        }
+      }
+
+      // 3. Off-service Remarks
       const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
-      
       const offServiceKeywords = [
         '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
         '服務已結束', '服務結束', '非服務時間', '非營運時間', '非營運時段', '暫停服務', '未有班次', '班次未定',
@@ -972,14 +994,12 @@
         }
       }
 
+      // 4. Time Freshness Window
       const etaDate = parseEtaToDate(item, now);
       if (!etaDate) return false;
 
       const diffMs = etaDate.getTime() - now.getTime();
-      const diffMin = Math.round(diffMs / 60000);
-
-      if (diffMin < -1) return false;
-      if (diffMin > 120) return false;
+      if (diffMs < -60000) return false; // Allow buses up to 60 seconds in past (at stop/departing)
 
       return true;
     }
@@ -1164,10 +1184,19 @@
 
       if (stop.kmbStopId) {
         const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
+        const serviceType = currentSelectedRoute.serviceType || '1';
+        
         fetchPromises.push(
-          fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/1`, {}, 6000, 2)
+          fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/${serviceType}`, {}, 6000, 2)
             .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
         );
+
+        if (serviceType !== '1') {
+          fetchPromises.push(
+            fetchWithRetry(`${KMB_BASE}/eta/${stop.kmbStopId}/${currentSelectedRoute.route}/1`, {}, 6000, 2)
+              .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: routeIsLwb ? 'LWB' : (item.co || defaultTag) })))
+          );
+        }
       }
 
       if (stop.ctbStopId) {
@@ -1196,23 +1225,15 @@
 
       try {
         const now = new Date();
-        const targetBoundChar = (currentSelectedRoute.dir === 'outbound') ? 'O' : 'I';
+        const targetDirStr = currentSelectedRoute.dir;
+        const origTc = currentSelectedRoute.origTc;
+        const destTc = currentSelectedRoute.destTc;
         const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
-        const targetDestTc = cleanStopName(currentSelectedRoute.destTc);
 
         // Fetch Origin ETAs
         const rawOrigEtas = await fetchStopRawEtas(currentOriginStop);
         const formattedOrigEtas = rawOrigEtas
-          .filter(item => {
-            if (!isValidRealtimeEta(item, targetBoundChar, now)) return false;
-            if (item.dest_tc && targetDestTc) {
-              const itemDestClean = cleanStopName(item.dest_tc);
-              if (itemDestClean && !itemDestClean.includes(targetDestTc) && !targetDestTc.includes(itemDestClean)) {
-                if (!item.dir) return false;
-              }
-            }
-            return true;
-          })
+          .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
           .map(item => {
             const etaDate = parseEtaToDate(item, now);
             let diffMin = Math.round((etaDate - now) / 60000);
@@ -1235,19 +1256,21 @@
             };
           });
 
-        // Deduplicate & Sort Origin ETAs
+        // Deduplicate using company and exact timestamp signature
         const uniqueOrigEtas = [];
         const seenOrig = new Set();
         formattedOrigEtas.forEach(item => {
-          const key = `${item.company}-${item.exactTime}-${item.mins}`;
+          const key = `${item.company}-${item.rawTime}`;
           if (!seenOrig.has(key)) {
             seenOrig.add(key);
             uniqueOrigEtas.push(item);
           }
         });
+
+        // Sort chronologically ascending
         uniqueOrigEtas.sort((a, b) => a.rawTime - b.rawTime);
 
-        // Render Origin ETAs
+        // Render top 3 ETAs
         const nextETAs = uniqueOrigEtas.slice(0, 3);
         etaContainer.innerHTML = '';
 
@@ -1290,7 +1313,7 @@
         if (currentDestStop) {
           const rawDestEtas = await fetchStopRawEtas(currentDestStop);
           const formattedDestEtas = rawDestEtas
-            .filter(item => isValidRealtimeEta(item, targetBoundChar, now))
+            .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
             .map(item => {
               const etaDate = parseEtaToDate(item, now);
               let co = (item.co && item.co.trim()) ? item.co.trim().toUpperCase() : item.defaultCo;
