@@ -130,8 +130,8 @@
         resetStops: "重置車站",
         fetchingEta: "查詢實時時間中...",
         calculatingTime: "計算車程時間中...",
-        travelTimeEstimate: "預計車程：約 {mins} 分鐘 ({stops} 個站)",
-        travelTimeUnavailable: "預計車程：暫無即時班次可供比對",
+        travelTimeLive: "預計車程：約 {mins} 分鐘 ({stops} 個站) • 實時動態",
+        travelTimeFallback: "預計車程：約 {mins} 分鐘 ({stops} 個站) • 班次預估",
         noEta: "暫無即時班次資料",
         etaError: "無法獲取實時數據",
         departing: "即將開出",
@@ -167,8 +167,8 @@
         resetStops: "Reset",
         fetchingEta: "Fetching real-time ETAs...",
         calculatingTime: "Calculating travel time...",
-        travelTimeEstimate: "Est. Travel Time: ~{mins} mins ({stops} stops)",
-        travelTimeUnavailable: "Travel Time: N/A (no matching live trips)",
+        travelTimeLive: "Est. Travel Time: ~{mins} mins ({stops} stops) • Live",
+        travelTimeFallback: "Est. Travel Time: ~{mins} mins ({stops} stops) • Scheduled",
         noEta: "No real-time ETA available",
         etaError: "Failed to load ETA data",
         departing: "Departing",
@@ -238,6 +238,18 @@
       window.open(`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${long}`, '_blank');
     }
 
+    function getHaversineDistanceKm(lat1, lon1, lat2, lon2) {
+      if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
     function isLwbRoute(routeNum) {
       if (!routeNum) return false;
       const r = String(routeNum).trim().toUpperCase();
@@ -273,13 +285,8 @@
       const isWeekday = date.getDay() >= 1 && date.getDay() <= 5 && !isHongKongPublicHoliday(date);
       const hour = date.getHours();
 
-      // Central Chater Road Pedestrian Scheme (Sun & PH 07:00-24:00 | Sat 20:00-24:00)
       const centralPedActive = (isSunPH && hour >= 7) || (isSat && hour >= 20);
-
-      // Causeway Bay Pedestrian Scheme (Sat, Sun & PH 12:00-24:00)
       const cwbPedActive = (isSat || isSunPH) && (hour >= 12);
-
-      // Stanley Main Street Scheme (Sun & PH 11:00-18:00)
       const stanleyPedActive = isSunPH && (hour >= 11 && hour < 18);
 
       return {
@@ -296,7 +303,6 @@
     function filterSpecialDayAndZoneStops(stops, date = new Date()) {
       const status = getHkScheduleStatus(date);
 
-      // 1. Central Scheme Pairs
       const hasCentralNormal = stops.some(s => 
         /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test((s.name_tc || '') + ' ' + (s.name_en || '')) ||
         ['001032', '001033', '001034'].includes(s.ctbStopId || '')
@@ -306,7 +312,6 @@
         ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(s.ctbStopId || '')
       );
 
-      // 2. Causeway Bay Scheme Pairs
       const hasCwbNormal = stops.some(s => 
         /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
       );
@@ -314,7 +319,6 @@
         /邊寧頓街|Pennington/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
       );
 
-      // 3. Stanley Scheme Pairs
       const hasStanleyNormal = stops.some(s => 
         /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test((s.name_tc || '') + ' ' + (s.name_en || ''))
       );
@@ -328,7 +332,6 @@
         const fullName = `${nameTc} ${nameEn}`;
         const ctbId = s.ctbStopId || '';
 
-        // Central Scheme Check
         const isCentralNormalStop = /皇后像廣場|遮打道|冰廠街|聖佐治大廈|Statue Square|Chater Road|Ice House/i.test(fullName) || ['001032', '001033', '001034'].includes(ctbId);
         const isCentralDivStop = /遮打花園|歷山大廈|置地廣場|Chater Garden|Alexandra House|Landmark/i.test(fullName) || ['001035', '001036', '001037', '001052', '001052A', '001052B', '001052C'].includes(ctbId);
 
@@ -340,7 +343,6 @@
           }
         }
 
-        // Causeway Bay Scheme Check
         const isCwbNormalStop = /百德新街|啟超道|東角道|駱克道|蘭芳道|Paterson|Kai Chiu|East Point|Lockhart|Lan Fong/i.test(fullName);
         const isCwbDivStop = /邊寧頓街|Pennington/i.test(fullName);
 
@@ -352,7 +354,6 @@
           }
         }
 
-        // Stanley Scheme Check
         const isStanleyNormalStop = /赤柱大街|赤柱市場|Stanley Main Street|Stanley Market/i.test(fullName);
         const isStanleyDivStop = /赤柱村|Stanley Village/i.test(fullName);
 
@@ -364,7 +365,6 @@
           }
         }
 
-        // Universal Special Day Keywords Check
         if (/只限星期日及公眾假期|只限假日|星期日及公眾假期特別|Sundays? & Public Holidays? Only|Sundays? and Public Holidays? Only/i.test(fullName)) {
           if (!status.isSunPH) return false;
         }
@@ -393,7 +393,6 @@
           if (status.isWeekday) return false;
         }
 
-        // Peak Hour / Morning Peak / School Day Special Stops
         if (/只限繁忙時間|晨早特別班次|特別班次|只限上課日|Peak Hours? Only|Morning Peak Only|School Days? Only/i.test(fullName)) {
           if (!status.isWeekday) return false;
           const isMorningPeak = status.hour >= 7 && status.hour < 10;
@@ -956,7 +955,6 @@
       const hasEtaSeconds = typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond);
       if (!hasEtaString && !hasEtaSeconds) return false;
 
-      // 1. Strict Direction Normalization & Matching
       const targetNorm = normalizeDir(targetDirStr);
       const itemDirNorm = normalizeDir(item.dir);
 
@@ -966,7 +964,6 @@
         }
       }
 
-      // 2. Destination vs Origin Check (Double Safety Net against Opposite Direction)
       const cleanOrig = cleanStopName(origTc);
       const cleanDest = cleanStopName(destTc);
       const itemDestClean = item.dest_tc ? cleanStopName(item.dest_tc) : '';
@@ -978,7 +975,6 @@
         }
       }
 
-      // 3. Off-service Remarks
       const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
       const offServiceKeywords = [
         '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
@@ -994,12 +990,11 @@
         }
       }
 
-      // 4. Time Freshness Window
       const etaDate = parseEtaToDate(item, now);
       if (!etaDate) return false;
 
       const diffMs = etaDate.getTime() - now.getTime();
-      if (diffMs < -60000) return false; // Allow buses up to 60 seconds in past (at stop/departing)
+      if (diffMs < -60000) return false;
 
       return true;
     }
@@ -1015,7 +1010,6 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        // 1. Fetch KMB / LWB Master Stop Sequence for target direction
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
@@ -1032,7 +1026,6 @@
           }
         }
 
-        // 2. Query Citybus API for CTB Route Stops for target direction
         if (route.companies.includes('CTB')) {
           const [resOut, resIn] = await Promise.all([
             fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
@@ -1050,7 +1043,6 @@
           ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, route.dir);
         }
 
-        // 3. Anchor / merge stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
@@ -1058,7 +1050,6 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
-        // 4. Apply Universal Special Days & Times Filtering
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
@@ -1256,7 +1247,6 @@
             };
           });
 
-        // Deduplicate using company and exact timestamp signature
         const uniqueOrigEtas = [];
         const seenOrig = new Set();
         formattedOrigEtas.forEach(item => {
@@ -1267,10 +1257,8 @@
           }
         });
 
-        // Sort chronologically ascending
         uniqueOrigEtas.sort((a, b) => a.rawTime - b.rawTime);
 
-        // Render top 3 ETAs
         const nextETAs = uniqueOrigEtas.slice(0, 3);
         etaContainer.innerHTML = '';
 
@@ -1309,8 +1297,12 @@
           });
         }
 
-        // Calculate Inter-Stop Travel Time if Destination is set
+        // --- Enhanced Travel Time Calculation Engine ---
         if (currentDestStop) {
+          const origSeqNum = currentOriginStop.displaySeq || currentOriginStop.seq;
+          const destSeqNum = currentDestStop.displaySeq || currentDestStop.seq;
+          const stopCount = Math.max(1, destSeqNum - origSeqNum);
+
           const rawDestEtas = await fetchStopRawEtas(currentDestStop);
           const formattedDestEtas = rawDestEtas
             .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
@@ -1321,28 +1313,55 @@
               return { company: co, rawTime: etaDate.getTime() };
             });
 
+          formattedDestEtas.sort((a, b) => a.rawTime - b.rawTime);
+
           let travelDiffMins = null;
+          let isLiveEstimate = false;
+
+          // 1. Primary Method: Live Chronological Inter-Stop Transit Matching
           if (uniqueOrigEtas.length > 0 && formattedDestEtas.length > 0) {
-            for (let i = 0; i < Math.min(uniqueOrigEtas.length, formattedDestEtas.length); i++) {
-              const oEta = uniqueOrigEtas[i];
-              const dEta = formattedDestEtas.find((d, idx) => idx === i || (d.company === oEta.company && d.rawTime > oEta.rawTime));
-              
-              if (dEta && dEta.rawTime > oEta.rawTime) {
-                const diffMs = dEta.rawTime - oEta.rawTime;
+            const minTimeMs = Math.max(45000, stopCount * 40000); // Minimum realistic physical transit duration
+
+            for (const oEta of uniqueOrigEtas) {
+              const matchingDest = formattedDestEtas.find(dEta => {
+                const isCoMatch = (oEta.company === dEta.company) || isJointRouteNumber(currentSelectedRoute.route);
+                const diff = dEta.rawTime - oEta.rawTime;
+                return isCoMatch && diff >= minTimeMs;
+              });
+
+              if (matchingDest) {
+                const diffMs = matchingDest.rawTime - oEta.rawTime;
                 travelDiffMins = Math.round(diffMs / 60000);
-                if (travelDiffMins > 0) break;
+                if (travelDiffMins >= 1) {
+                  isLiveEstimate = true;
+                  break;
+                }
               }
             }
           }
 
-          const origSeqNum = currentOriginStop.displaySeq || currentOriginStop.seq;
-          const destSeqNum = currentDestStop.displaySeq || currentDestStop.seq;
-          const stopCount = destSeqNum - origSeqNum;
+          // 2. Secondary Fallback: GPS Distance & Stop Dwell Matrix
+          if (travelDiffMins === null || travelDiffMins <= 0) {
+            const distKm = getHaversineDistanceKm(
+              currentOriginStop.lat, currentOriginStop.long,
+              currentDestStop.lat, currentDestStop.long
+            );
 
-          if (travelDiffMins !== null && travelDiffMins > 0) {
-            travelTimeText.textContent = t('travelTimeEstimate', { mins: travelDiffMins, stops: stopCount });
+            if (distKm && distKm > 0.1) {
+              const driveTimeMins = (distKm / 20.0) * 60; // 20 km/h urban average speed
+              const dwellTimeMins = stopCount * 0.35;    // 20 sec dwell per stop
+              travelDiffMins = Math.max(1, Math.round(driveTimeMins + dwellTimeMins));
+            } else {
+              travelDiffMins = Math.max(1, Math.round(stopCount * 2.0)); // 2.0 mins per stop baseline
+            }
+            isLiveEstimate = false;
+          }
+
+          // Display Travel Time Result Banner
+          if (isLiveEstimate) {
+            travelTimeText.textContent = t('travelTimeLive', { mins: travelDiffMins, stops: stopCount });
           } else {
-            travelTimeText.textContent = t('travelTimeUnavailable');
+            travelTimeText.textContent = t('travelTimeFallback', { mins: travelDiffMins, stops: stopCount });
           }
         }
 
