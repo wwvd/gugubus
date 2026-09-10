@@ -104,6 +104,7 @@
     let autoRefreshTimer = null;
     let activeCompanyFilter = 'ALL';
     let kmbAllStopsLoaded = false;
+    let ctbAllStopsLoaded = false;
 
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
@@ -504,6 +505,28 @@
       }
     }
 
+    async function preloadCtbStops() {
+      if (ctbAllStopsLoaded) return;
+      try {
+        const res = await fetchWithRetry(`${CTB_BASE}/stop`, {}, 15000, 2);
+        if (res && Array.isArray(res.data)) {
+          res.data.forEach(s => {
+            if (s.stop) {
+              ctbStopMap.set(s.stop, {
+                name_tc: s.name_tc || s.name_en || `巴士站 ${s.stop}`,
+                name_en: s.name_en || s.name_tc || `Bus Stop ${s.stop}`,
+                lat: parseFloat(s.lat) || null,
+                long: parseFloat(s.long) || null
+              });
+            }
+          });
+          ctbAllStopsLoaded = true;
+        }
+      } catch (e) {
+        console.warn("Bulk CTB stops preload fallback to individual fetch", e);
+      }
+    }
+
     async function getStopDetail(company, stopId) {
       if (company === 'KMB' || company === 'LWB') {
         if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
@@ -535,15 +558,11 @@
       return { name_tc: `巴士站 ${stopId}`, name_en: `Bus Stop ${stopId}`, lat: null, long: null };
     }
 
-    async function getCtbStopsConcurrently(stopIds) {
-      const uncached = stopIds.filter(id => !ctbStopMap.has(id));
-      if (uncached.length > 0) {
-        const batchSize = 6;
-        for (let i = 0; i < uncached.length; i += batchSize) {
-          const batch = uncached.slice(i, i + batchSize);
-          await Promise.all(batch.map(id => getStopDetail('CTB', id)));
-        }
-      }
+    function getGpsDistance(s1, s2) {
+      if (!s1 || !s2 || s1.lat == null || s1.long == null || s2.lat == null || s2.long == null) return Infinity;
+      const dLat = s1.lat - s2.lat;
+      const dLong = s1.long - s2.long;
+      return Math.sqrt(dLat * dLat + dLong * dLong);
     }
 
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
@@ -557,7 +576,8 @@
         const [kmbRes, ctbRes] = await Promise.all([
           fetchWithRetry(`${KMB_BASE}/route`, {}, 15000, 3),
           fetchWithRetry(`${CTB_BASE}/route/CTB`, {}, 12000, 3),
-          preloadKmbStops()
+          preloadKmbStops(),
+          preloadCtbStops()
         ]);
 
         if (!kmbRes && !ctbRes) {
@@ -831,38 +851,6 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
-    async function getActiveCtbStops(routeNum, rawOut, rawIn, targetDir) {
-      const ctbOutDetailed = rawOut.map(s => {
-        const info = ctbStopMap.get(s.stop) || {};
-        return { 
-          stopId: s.stop, 
-          seq: s.seq, 
-          name_tc: info.name_tc || `巴士站 ${s.stop}`, 
-          name_en: info.name_en || `Bus Stop ${s.stop}`, 
-          lat: info.lat, 
-          long: info.long 
-        };
-      });
-
-      const ctbInDetailed = rawIn.map(s => {
-        const info = ctbStopMap.get(s.stop) || {};
-        return { 
-          stopId: s.stop, 
-          seq: s.seq, 
-          name_tc: info.name_tc || `巴士站 ${s.stop}`, 
-          name_en: info.name_en || `Bus Stop ${s.stop}`, 
-          lat: info.lat, 
-          long: info.long 
-        };
-      });
-
-      if (targetDir === 'inbound') {
-        return ctbInDetailed.length ? ctbInDetailed : ctbOutDetailed;
-      } else {
-        return ctbOutDetailed.length ? ctbOutDetailed : ctbInDetailed;
-      }
-    }
-
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -889,28 +877,24 @@
       }
 
       const usedCtbIndices = new Set();
-      const numK = kmbStops.length;
-      const numC = ctbStops.length;
-
-      return kmbStops.map((kStop, kIdx) => {
+      const matched = kmbStops.map((kStop) => {
         const kClean = cleanStopName(kStop.name_tc);
         let bestCtbIdx = -1;
         let bestScore = -1;
 
-        const expectedCIdx = Math.round((kIdx / (numK - 1 || 1)) * (numC - 1));
-
         ctbStops.forEach((cStop, cIdx) => {
           if (usedCtbIndices.has(cIdx)) return;
-          if (Math.abs(cIdx - expectedCIdx) > 6) return;
 
           const cClean = cleanStopName(cStop.name_tc);
-          let sim = stringSimilarity(kClean, cClean);
+          let score = stringSimilarity(kClean, cClean);
           const dist = getGpsDistance(kStop, cStop);
 
-          if (dist < 0.003) sim += 0.4;
+          if (dist < 0.003) { // within 300 meters
+            score += 0.4;
+          }
 
-          if (sim > bestScore && sim > 0.25) {
-            bestScore = sim;
+          if (score > bestScore && score > 0.25) {
+            bestScore = score;
             bestCtbIdx = cIdx;
           }
         });
@@ -937,6 +921,8 @@
           long: kStop.long
         };
       });
+
+      return matched;
     }
 
     function isValidRealtimeEta(item, targetDirStr, origTc, destTc, now = new Date()) {
@@ -947,7 +933,7 @@
       if (!hasEtaString && !hasEtaSeconds) return false;
 
       const targetNorm = normalizeDir(targetDirStr);
-      const itemDirNorm = normalizeDir(item.dir);
+      const itemDirNorm = normalizeDir(item.dir || item.bound);
 
       if (itemDirNorm && targetNorm) {
         if (itemDirNorm !== targetNorm && itemDirNorm !== 'CIRCULAR') {
@@ -1001,6 +987,7 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
+        // 1. Fetch KMB / LWB Stops
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
           const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
                             getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
@@ -1017,23 +1004,27 @@
           }
         }
 
+        // 2. Fetch CTB Stops
         if (route.companies.includes('CTB')) {
-          const [resOut, resIn] = await Promise.all([
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 8000, 2)
-          ]);
+          const ctbDir = route.dir === 'inbound' ? 'inbound' : 'outbound';
+          const res = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${ctbDir}`, {}, 8000, 2);
+          let rawStops = (res && res.data) || [];
 
-          const rawOut = (resOut && resOut.data) || [];
-          const rawIn = (resIn && resIn.data) || [];
+          if (rawStops.length === 0) {
+            const altDir = ctbDir === 'inbound' ? 'outbound' : 'inbound';
+            const resAlt = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${altDir}`, {}, 8000, 2);
+            rawStops = (resAlt && resAlt.data) || [];
+          }
 
-          await Promise.all([
-            getCtbStopsConcurrently(rawOut.map(s => s.stop)),
-            getCtbStopsConcurrently(rawIn.map(s => s.stop))
-          ]);
+          const sortedRawStops = [...rawStops].sort((a, b) => a.seq - b.seq);
 
-          ctbStopsDetailed = await getActiveCtbStops(route.route, rawOut, rawIn, route.dir);
+          ctbStopsDetailed = await Promise.all(sortedRawStops.map(async (s) => {
+            const info = await getStopDetail('CTB', s.stop);
+            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
+          }));
         }
 
+        // 3. Merge Joint Stops
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
@@ -1041,6 +1032,7 @@
           finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long }));
         }
 
+        // 4. Special Day / Zone Filtering
         finalStops = filterSpecialDayAndZoneStops(finalStops, new Date());
 
         finalStops.forEach((s, idx) => { s.displaySeq = idx + 1; });
@@ -1297,7 +1289,6 @@
             const stopCount = destIdx - origIdx;
             let totalSegMins = 0;
 
-            // Segment-by-Segment GPS Distance & Speed Profiling
             for (let i = origIdx; i < destIdx; i++) {
               const s1 = currentRenderedStops[i];
               const s2 = currentRenderedStops[i+1];
@@ -1305,21 +1296,20 @@
 
               if (dist && dist > 0.05) {
                 if (dist > 2.5) {
-                  totalSegMins += (dist / 55.0) * 60; // Expressway / Tunnel speed profile
+                  totalSegMins += (dist / 55.0) * 60;
                 } else if (dist > 1.2) {
-                  totalSegMins += (dist / 35.0) * 60; // Suburban speed profile
+                  totalSegMins += (dist / 35.0) * 60;
                 } else {
-                  totalSegMins += (dist / 18.0) * 60; // Urban street speed profile
+                  totalSegMins += (dist / 18.0) * 60;
                 }
               } else {
-                totalSegMins += 1.5; // Baseline segment time
+                totalSegMins += 1.5;
               }
-              totalSegMins += 0.4; // Intermediate stop dwell time (24s)
+              totalSegMins += 0.4;
             }
 
             let calculatedMins = Math.max(1, Math.round(totalSegMins));
 
-            // Optional: Live ETA verification for close stops (<= 5 stops)
             if (stopCount <= 5 && uniqueOrigEtas.length > 0) {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
               const formattedDestEtas = rawDestEtas
