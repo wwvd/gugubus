@@ -708,6 +708,32 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
+    // Universal Direction Alignment Engine (KMB vs CTB Terminal Mapping)
+    function alignCtbDirection(kmbStops, ctbOutStops, ctbInStops, kmbOrigTc, kmbDestTc) {
+      if (!ctbOutStops.length && !ctbInStops.length) return 'outbound';
+      if (!ctbOutStops.length) return 'inbound';
+      if (!ctbInStops.length) return 'outbound';
+
+      const kmbStart = cleanStopName(kmbOrigTc || (kmbStops[0]?.name_tc));
+      const kmbEnd = cleanStopName(kmbDestTc || (kmbStops[kmbStops.length - 1]?.name_tc));
+
+      const outStart = cleanStopName(ctbOutStops[0]?.name_tc);
+      const outEnd = cleanStopName(ctbOutStops[ctbOutStops.length - 1]?.name_tc);
+
+      const inStart = cleanStopName(ctbInStops[0]?.name_tc);
+      const inEnd = cleanStopName(ctbInStops[ctbInStops.length - 1]?.name_tc);
+
+      let outScore = 0;
+      if (kmbStart && outStart && (kmbStart.includes(outStart) || outStart.includes(kmbStart))) outScore += 2;
+      if (kmbEnd && outEnd && (kmbEnd.includes(outEnd) || outEnd.includes(kmbEnd))) outScore += 2;
+
+      let inScore = 0;
+      if (kmbStart && inStart && (kmbStart.includes(inStart) || inStart.includes(kmbStart))) inScore += 2;
+      if (kmbEnd && inEnd && (kmbEnd.includes(inEnd) || inEnd.includes(kmbEnd))) inScore += 2;
+
+      return (inScore > outScore) ? 'inbound' : 'outbound';
+    }
+
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -801,23 +827,19 @@
       const diffMs = etaDate.getTime() - now.getTime();
       if (diffMs < -60000) return false;
 
-      const itemCo = (item.co || item.defaultCo || '').toUpperCase();
+      const apiSource = item.apiSource;
       const rawDir = String(item.dir || item.bound || '').trim().toUpperCase();
 
       if (rawDir) {
-        const normalizedItemDir = (rawDir === 'O' || rawDir === 'OUTBOUND' || rawDir === 'OUT' || rawDir === '1') ? 'O' :
-                                  (rawDir === 'I' || rawDir === 'INBOUND' || rawDir === 'IN' || rawDir === '2') ? 'I' : '';
+        const normalizedDir = (rawDir === 'O' || rawDir === 'OUTBOUND' || rawDir === 'OUT' || rawDir === '1') ? 'O' :
+                              (rawDir === 'I' || rawDir === 'INBOUND' || rawDir === 'IN' || rawDir === '2') ? 'I' : '';
 
-        if (itemCo === 'CTB') {
-          const expectedCtbChar = (expectedCtbBound === 'outbound' || expectedCtbBound === 'O') ? 'O' : 'I';
-          if (normalizedItemDir && normalizedItemDir !== expectedCtbChar) {
-            return false;
-          }
+        if (apiSource === 'CTB_API') {
+          const targetChar = (expectedCtbBound === 'outbound' || expectedCtbBound === 'O') ? 'O' : 'I';
+          if (normalizedDir && normalizedDir !== targetChar) return false;
         } else {
-          const expectedKmbChar = (expectedKmbBound === 'outbound' || expectedKmbBound === 'O') ? 'O' : 'I';
-          if (normalizedItemDir && normalizedItemDir !== expectedKmbChar) {
-            return false;
-          }
+          const targetChar = (expectedKmbBound === 'outbound' || expectedKmbBound === 'O') ? 'O' : 'I';
+          if (normalizedDir && normalizedDir !== targetChar) return false;
         }
       }
 
@@ -868,39 +890,21 @@
           const rawOut = (resOut && resOut.data) || [];
           const rawIn = (resIn && resIn.data) || [];
 
-          let matchCountOut = 0;
-          let matchCountIn = 0;
-
-          if (kmbStopsDetailed.length > 0) {
-            rawOut.forEach(cS => {
-              if (kmbStopsDetailed.some(kS => getStopNameSimilarity(kS.name_tc, cS.stop) > 0.4 || getStopNameSimilarity(kS.name_en, cS.stop) > 0.4)) {
-                matchCountOut++;
-              }
-            });
-            rawIn.forEach(cS => {
-              if (kmbStopsDetailed.some(kS => getStopNameSimilarity(kS.name_tc, cS.stop) > 0.4 || getStopNameSimilarity(kS.name_en, cS.stop) > 0.4)) {
-                matchCountIn++;
-              }
-            });
-          }
-
-          const ctbMatchedDir = (matchCountIn > matchCountOut && rawIn.length > 0) ? 'inbound' : 'outbound';
-          currentSelectedRoute.ctbMatchedDir = ctbMatchedDir;
-
-          const primaryRaw = (ctbMatchedDir === 'inbound') ? rawIn : rawOut;
-          const secondaryRaw = (ctbMatchedDir === 'inbound') ? rawOut : rawIn;
-          
-          const combinedRawCtb = [...primaryRaw];
-          secondaryRaw.forEach(s => {
-            if (!combinedRawCtb.some(p => p.stop === s.stop)) {
-              combinedRawCtb.push(s);
-            }
-          });
-
-          ctbStopsDetailed = await Promise.all(combinedRawCtb.map(async (s) => {
+          const ctbOutStopsDetailed = await Promise.all(rawOut.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
             return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
           }));
+
+          const ctbInStopsDetailed = await Promise.all(rawIn.map(async (s) => {
+            const info = await getStopDetail('CTB', s.stop);
+            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
+          }));
+
+          // Align CTB direction relative to active KMB route direction
+          const ctbAlignedDir = alignCtbDirection(kmbStopsDetailed, ctbOutStopsDetailed, ctbInStopsDetailed, route.origTc, route.destTc);
+          currentSelectedRoute.ctbMatchedDir = ctbAlignedDir;
+
+          ctbStopsDetailed = (ctbAlignedDir === 'inbound') ? ctbInStopsDetailed : ctbOutStopsDetailed;
         } else {
           currentSelectedRoute.ctbMatchedDir = route.dir;
         }
@@ -1032,7 +1036,6 @@
       return isNaN(d.getTime()) ? null : d;
     }
 
-    // Dynamic On-Click Fetcher with Real-Time Spatial ID Resolution
     async function fetchStopRawEtas(stop) {
       let fetchPromises = [];
       const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
@@ -1041,7 +1044,6 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
-      // On-Demand Dynamic Resolution if ctbId is missing when clicked
       if (isJoint && !ctbId && currentSelectedRoute.ctbStopsDetailed && currentSelectedRoute.ctbStopsDetailed.length > 0) {
         let bestRouteScore = -1;
         let bestRouteCtb = null;
@@ -1065,7 +1067,7 @@
 
         if (bestRouteCtb && bestRouteScore >= 0.30) {
           ctbId = bestRouteCtb.stopId;
-          stop.ctbStopId = ctbId; // Bind for future refreshes
+          stop.ctbStopId = ctbId;
         }
       }
 
@@ -1077,6 +1079,7 @@
           fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/${serviceType}`, {}, 4000, 2)
             .then(res => ((res && res.data) || []).map(item => ({
               ...item,
+              apiSource: 'KMB_API',
               defaultCo: routeIsLwb ? 'LWB' : (item.co && item.co.trim() ? item.co.trim().toUpperCase() : defaultTag)
             })))
         );
@@ -1086,6 +1089,7 @@
             fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/1`, {}, 4000, 2)
               .then(res => ((res && res.data) || []).map(item => ({
                 ...item,
+                apiSource: 'KMB_API',
                 defaultCo: routeIsLwb ? 'LWB' : (item.co && item.co.trim() ? item.co.trim().toUpperCase() : defaultTag)
               })))
           );
@@ -1095,7 +1099,11 @@
       if (isJoint && ctbId) {
         fetchPromises.push(
           fetchWithRetry(`${CTB_BASE}/eta/CTB/${ctbId}/${currentSelectedRoute.route}`, {}, 4000, 2)
-            .then(res => ((res && res.data) || []).map(item => ({ ...item, defaultCo: 'CTB' })))
+            .then(res => ((res && res.data) || []).map(item => ({
+              ...item,
+              apiSource: 'CTB_API',
+              defaultCo: 'CTB'
+            })))
         );
       }
 
