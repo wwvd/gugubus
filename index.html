@@ -257,6 +257,15 @@
       return /^(A\d|E\d|NA\d|S\d|R\d|N30|N31|N39|N42|N64|X33|X34|X36|X43|X47)/.test(r);
     }
 
+    function isCircularRoute(route) {
+      if (!route) return false;
+      const orig = cleanStopName(route.origTc);
+      const dest = cleanStopName(route.destTc);
+      if (orig && dest && orig === dest) return true;
+      if (/循環線|circular/i.test(route.origTc || '') || /循環線|circular/i.test(route.destTc || '')) return true;
+      return false;
+    }
+
     function cleanStopName(name) {
       if (!name) return '';
       return String(name)
@@ -733,7 +742,6 @@
       return (inScore > outScore) ? 'inbound' : 'outbound';
     }
 
-    // Sequence-Preserving Joint Stop Matcher
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -786,7 +794,13 @@
 
           score += nameSim * 0.5;
 
-          if (score > bestScore && (score >= 0.30 || (dist != null && dist < 0.35))) {
+          if (ctbStops.length > 1 && kmbStops.length > 1) {
+            const kRatio = kIdx / (kmbStops.length - 1);
+            const cRatio = cIdx / (ctbStops.length - 1);
+            if (Math.abs(kRatio - cRatio) < 0.20) score += 0.20;
+          }
+
+          if (score > bestScore && (score >= 0.25 || (dist != null && dist < 0.40))) {
             bestScore = score;
             bestCtbIdx = cIdx;
           }
@@ -822,7 +836,6 @@
       });
     }
 
-    // Sequence & Direction Validation Engine
     function isValidRealtimeEta(item, expectedKmbBound, expectedCtbBound, origTc, destTc, now = new Date(), targetStop = null) {
       if (!item) return false;
 
@@ -837,10 +850,10 @@
       if (diffMs < -60000) return false;
 
       const apiSource = item.apiSource;
-      const rawDir = String(item.dir || item.bound || '').trim().toUpperCase();
+      const isCircular = isCircularRoute(currentSelectedRoute);
 
-      // Sequence Number Matching for Circular / Loop Routes (e.g. Route 110)
-      if (targetStop && typeof item.seq !== 'undefined' && item.seq !== null) {
+      // Sequence Check strictly reserved for Circular Routes (e.g. Route 110)
+      if (isCircular && targetStop && typeof item.seq !== 'undefined' && item.seq !== null) {
         const itemSeq = parseInt(item.seq, 10);
         if (apiSource === 'CTB_API') {
           if (targetStop.ctbSeq != null && itemSeq !== parseInt(targetStop.ctbSeq, 10)) {
@@ -853,16 +866,19 @@
         }
       }
 
-      if (rawDir) {
-        const normalizedDir = (rawDir === 'O' || rawDir === 'OUTBOUND' || rawDir === 'OUT' || rawDir === '1') ? 'O' :
-                              (rawDir === 'I' || rawDir === 'INBOUND' || rawDir === 'IN' || rawDir === '2') ? 'I' : '';
+      // Destination-driven Direction Validation
+      const cleanOrig = cleanStopName(origTc);
+      const cleanDest = cleanStopName(destTc);
+      const rawItemDest = (item.dest_tc || item.dest_en || '').trim();
+      const cleanItemDest = cleanStopName(rawItemDest);
 
-        if (apiSource === 'CTB_API') {
-          const targetChar = (expectedCtbBound === 'outbound' || expectedCtbBound === 'O') ? 'O' : 'I';
-          if (normalizedDir && normalizedDir !== targetChar) return false;
-        } else {
-          const targetChar = (expectedKmbBound === 'outbound' || expectedKmbBound === 'O') ? 'O' : 'I';
-          if (normalizedDir && normalizedDir !== targetChar) return false;
+      if (cleanItemDest && cleanOrig && cleanDest && cleanOrig !== cleanDest) {
+        const simToOrig = getStopNameSimilarity(cleanItemDest, cleanOrig);
+        const simToDest = getStopNameSimilarity(cleanItemDest, cleanDest);
+
+        // Reject if trip is bound for origin terminal (opposite direction)
+        if (simToOrig > simToDest && simToOrig >= 0.35 && simToDest < 0.30) {
+          return false;
         }
       }
 
@@ -1087,7 +1103,7 @@
           }
         });
 
-        if (bestRouteCtb && bestRouteScore >= 0.30) {
+        if (bestRouteCtb && bestRouteScore >= 0.25) {
           ctbId = bestRouteCtb.stopId;
           stop.ctbStopId = ctbId;
           stop.ctbSeq = bestRouteCtb.seq;
