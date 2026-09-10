@@ -249,26 +249,6 @@
       return R * c;
     }
 
-    function findNearestStopId(lat, long, company) {
-      if (lat == null || long == null) return null;
-      const targetMap = (company === 'CTB') ? ctbStopMap : kmbStopMap;
-      let minDist = 0.005; // ~500 meters threshold
-      let nearestId = null;
-
-      for (const [stopId, info] of targetMap.entries()) {
-        if (info.lat != null && info.long != null) {
-          const dLat = info.lat - lat;
-          const dLong = info.long - long;
-          const dist = Math.sqrt(dLat * dLat + dLong * dLong);
-          if (dist < minDist) {
-            minDist = dist;
-            nearestId = stopId;
-          }
-        }
-      }
-      return nearestId;
-    }
-
     function isLwbRoute(routeNum) {
       if (!routeNum) return false;
       const r = String(routeNum).trim().toUpperCase();
@@ -521,7 +501,7 @@
           kmbAllStopsLoaded = true;
         }
       } catch (e) {
-        console.warn("Bulk KMB stops preload fallback to individual fetch", e);
+        console.warn("Bulk KMB stops preload fallback", e);
       }
     }
 
@@ -543,7 +523,7 @@
           ctbAllStopsLoaded = true;
         }
       } catch (e) {
-        console.warn("Bulk CTB stops preload fallback to individual fetch", e);
+        console.warn("Bulk CTB stops preload fallback", e);
       }
     }
 
@@ -871,6 +851,7 @@
       return { dir: targetDir, serviceType: '1' };
     }
 
+    // Monotonic Monitored Sequence Matching for Joint Route Stops
     function matchJointStops(kmbStops, ctbStops) {
       if (!kmbStops || !kmbStops.length) {
         if (ctbStops && ctbStops.length) {
@@ -896,28 +877,36 @@
         }));
       }
 
-      const usedCtbIndices = new Set();
-      const matched = kmbStops.map((kStop) => {
+      let lastMatchedCIdx = 0;
+      const matched = kmbStops.map((kStop, kIdx) => {
         const kClean = cleanStopName(kStop.name_tc);
         let bestCtbIdx = -1;
         let bestScore = -1;
 
-        ctbStops.forEach((cStop, cIdx) => {
-          if (usedCtbIndices.has(cIdx)) return;
-
+        for (let cIdx = lastMatchedCIdx; cIdx < ctbStops.length; cIdx++) {
+          const cStop = ctbStops[cIdx];
           const cClean = cleanStopName(cStop.name_tc);
+          
           let score = stringSimilarity(kClean, cClean);
           const dist = getGpsDistance(kStop, cStop);
 
-          if (dist < 0.0035) { // within 350m
+          if (dist < 0.003) { // within 300m
             score += 0.5;
           }
 
-          if (score > bestScore && score > 0.2) {
+          // Sequence ratio proximity bonus
+          const kRatio = kIdx / Math.max(1, kmbStops.length - 1);
+          const cRatio = cIdx / Math.max(1, ctbStops.length - 1);
+          const ratioDiff = Math.abs(kRatio - cRatio);
+          if (ratioDiff < 0.15) {
+            score += 0.2;
+          }
+
+          if (score > bestScore && (score > 0.35 || dist < 0.0025)) {
             bestScore = score;
             bestCtbIdx = cIdx;
           }
-        });
+        }
 
         let ctbId = null;
         let ctbNameEn = null;
@@ -925,29 +914,12 @@
         let ctbLong = null;
 
         if (bestCtbIdx !== -1) {
-          usedCtbIndices.add(bestCtbIdx);
-          ctbId = ctbStops[bestCtbIdx].stopId;
-          ctbNameEn = ctbStops[bestCtbIdx].name_en;
-          ctbLat = ctbStops[bestCtbIdx].lat;
-          ctbLong = ctbStops[bestCtbIdx].long;
-        } else if (kStop.lat && kStop.long) {
-          let minDist = 0.005; // 500m spatial search fallback
-          let nearestCtbIdx = -1;
-          ctbStops.forEach((cStop, cIdx) => {
-            if (usedCtbIndices.has(cIdx)) return;
-            const dist = getGpsDistance(kStop, cStop);
-            if (dist < minDist) {
-              minDist = dist;
-              nearestCtbIdx = cIdx;
-            }
-          });
-          if (nearestCtbIdx !== -1) {
-            usedCtbIndices.add(nearestCtbIdx);
-            ctbId = ctbStops[nearestCtbIdx].stopId;
-            ctbNameEn = ctbStops[nearestCtbIdx].name_en;
-            ctbLat = ctbStops[nearestCtbIdx].lat;
-            ctbLong = ctbStops[nearestCtbIdx].long;
-          }
+          lastMatchedCIdx = bestCtbIdx;
+          const matchedCStop = ctbStops[bestCtbIdx];
+          ctbId = matchedCStop.stopId;
+          ctbNameEn = matchedCStop.name_en;
+          ctbLat = matchedCStop.lat;
+          ctbLong = matchedCStop.long;
         }
 
         return {
@@ -982,7 +954,7 @@
         const simToDest = stringSimilarity(cleanItemDest, cleanDest);
 
         // Reject if ETA's destination matches the current origin better than current destination
-        if (simToOrig > simToDest && simToOrig >= 0.4) {
+        if (simToOrig > simToDest && simToOrig >= 0.35) {
           return false;
         }
 
@@ -1044,23 +1016,46 @@
         }
 
         if (route.companies.includes('CTB')) {
-          const ctbDir = route.dir === 'inbound' ? 'inbound' : 'outbound';
-          const res = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${ctbDir}`, {}, 8000, 2);
-          let rawStops = (res && res.data) || [];
+          // Robust Direction Alignment for CTB
+          const [resOut, resIn] = await Promise.all([
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 8000, 2),
+            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 8000, 2)
+          ]);
 
-          if (rawStops.length === 0) {
-            const altDir = ctbDir === 'inbound' ? 'outbound' : 'inbound';
-            const resAlt = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${altDir}`, {}, 8000, 2);
-            rawStops = (resAlt && resAlt.data) || [];
+          const rawOut = (resOut && resOut.data) || [];
+          const rawIn = (resIn && resIn.data) || [];
+
+          // Determine which CTB direction matches current target destination
+          let chosenRaw = rawOut;
+          if (rawOut.length > 0 && rawIn.length > 0) {
+            const firstOutStopId = rawOut[0]?.stop;
+            const firstOutInfo = await getStopDetail('CTB', firstOutStopId);
+            
+            const origClean = cleanStopName(route.origTc);
+            const destClean = cleanStopName(route.destTc);
+            const firstOutClean = cleanStopName(firstOutInfo.name_tc);
+
+            const simToOrig = stringSimilarity(firstOutClean, origClean);
+            const simToDest = stringSimilarity(firstOutClean, destClean);
+
+            if (simToDest > simToOrig && simToDest >= 0.3) {
+              chosenRaw = rawIn; // Outbound starts at destination, so Inbound matches current direction
+            }
+          } else if (rawOut.length === 0 && rawIn.length > 0) {
+            chosenRaw = rawIn;
           }
 
-          const sortedRawStops = [...rawStops].sort((a, b) => a.seq - b.seq);
+          const sortedRawStops = [...chosenRaw].sort((a, b) => a.seq - b.seq);
 
           ctbStopsDetailed = await Promise.all(sortedRawStops.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
             return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
           }));
         }
+
+        // Save detailed CTB stops to route context for spatial fallbacks
+        currentSelectedRoute.kmbStopsDetailed = kmbStopsDetailed;
+        currentSelectedRoute.ctbStopsDetailed = ctbStopsDetailed;
 
         let finalStops = [];
         if (kmbStopsDetailed.length > 0) {
@@ -1196,12 +1191,27 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
+      // Dynamic fallback search strictly within current route's CTB/KMB stop list
       if (isJoint) {
-        if (!kmbId && stop.lat && stop.long) {
-          kmbId = findNearestStopId(stop.lat, stop.long, 'KMB');
+        if (!ctbId && stop.lat && stop.long && currentSelectedRoute.ctbStopsDetailed) {
+          let minD = 0.003; // ~300m threshold
+          currentSelectedRoute.ctbStopsDetailed.forEach(cS => {
+            const dist = getGpsDistance(stop, cS);
+            if (dist < minD) {
+              minD = dist;
+              ctbId = cS.stopId;
+            }
+          });
         }
-        if (!ctbId && stop.lat && stop.long) {
-          ctbId = findNearestStopId(stop.lat, stop.long, 'CTB');
+        if (!kmbId && stop.lat && stop.long && currentSelectedRoute.kmbStopsDetailed) {
+          let minD = 0.003;
+          currentSelectedRoute.kmbStopsDetailed.forEach(kS => {
+            const dist = getGpsDistance(stop, kS);
+            if (dist < minD) {
+              minD = dist;
+              kmbId = kS.stopId;
+            }
+          });
         }
       }
 
@@ -1338,7 +1348,7 @@
             const stopCount = destIdx - origIdx;
             let liveDeltaMins = null;
 
-            // Tier 1: Try Primary Live Telemetry Delta between Destination and Origin
+            // Tier 1: Primary Live Telemetry Delta between Destination and Origin
             try {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
               const validDestEtas = rawDestEtas
@@ -1374,7 +1384,7 @@
             if (liveDeltaMins && liveDeltaMins >= Math.ceil(stopCount * 2.0)) {
               travelTimeText.textContent = t('travelTimeEstimate', { mins: liveDeltaMins, stops: stopCount });
             } else {
-              // Tier 2: Calibrated HK Bus Transit Routing Model (Google Maps Equivalent)
+              // Tier 2: Calibrated HK Bus Transit Routing Model
               let totalSegMins = 0;
 
               for (let i = origIdx; i < destIdx; i++) {
