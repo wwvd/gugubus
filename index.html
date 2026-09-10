@@ -457,7 +457,7 @@
     function stringSimilarity(s1, s2) {
       if (!s1 || !s2) return 0;
       if (s1 === s2) return 1.0;
-      if (s1.includes(s2) || s2.includes(s1)) return 0.8;
+      if (s1.includes(s2) || s2.includes(s1)) return 0.85;
       
       let matches = 0;
       const set2 = new Set(s2.split(''));
@@ -971,15 +971,28 @@
       const hasEtaSeconds = typeof item.arrivalTimeInSecond === 'number' && !isNaN(item.arrivalTimeInSecond);
       if (!hasEtaString && !hasEtaSeconds) return false;
 
-      const targetNorm = normalizeDir(targetDirStr);
-      const itemDirNorm = normalizeDir(item.dir || item.bound);
+      // --- Strict Destination Filtering to Eliminate Opposite Direction ETAs ---
+      const cleanOrig = cleanStopName(origTc);
+      const cleanDest = cleanStopName(destTc);
+      const rawDest = (item.dest_tc || item.dest_en || '').trim();
+      const cleanItemDest = cleanStopName(rawDest);
 
-      if (itemDirNorm && targetNorm) {
-        if (itemDirNorm !== targetNorm && itemDirNorm !== 'CIRCULAR') {
+      if (cleanItemDest && cleanOrig && cleanDest && cleanOrig !== cleanDest) {
+        const simToOrig = stringSimilarity(cleanItemDest, cleanOrig);
+        const simToDest = stringSimilarity(cleanItemDest, cleanDest);
+
+        // Reject if ETA's destination matches the current origin better than current destination
+        if (simToOrig > simToDest && simToOrig >= 0.4) {
+          return false;
+        }
+
+        // Exact sub-string origin match guard
+        if (cleanOrig.length >= 2 && cleanItemDest.includes(cleanOrig) && !cleanItemDest.includes(cleanDest)) {
           return false;
         }
       }
 
+      // Off-service & out-of-bounds keywords filter
       const rmk = ((item.rmk_tc || '') + ' ' + (item.rmk_en || '') + ' ' + (item.rmk || '')).toLowerCase();
       const hardOffKeywords = [
         '尾班車已過', '末班車已過', '最後班次已過', '最後班次已駛離', '尾班車已駛離', '末班車已駛離',
@@ -1183,7 +1196,6 @@
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
 
-      // Dynamic GPS pairing fallback for joint routes
       if (isJoint) {
         if (!kmbId && stop.lat && stop.long) {
           kmbId = findNearestStopId(stop.lat, stop.long, 'KMB');
@@ -1317,70 +1329,94 @@
           });
         }
 
-        // Inter-Stop Travel Time Calculation
+        // --- Multi-Tier Inter-Stop Travel Time Calculation Engine ---
         if (currentDestStop) {
           const origIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentOriginStop.displaySeq || currentOriginStop.seq));
           const destIdx = currentRenderedStops.findIndex(s => (s.displaySeq || s.seq) === (currentDestStop.displaySeq || currentDestStop.seq));
 
           if (origIdx !== -1 && destIdx !== -1 && destIdx > origIdx) {
             const stopCount = destIdx - origIdx;
-            let totalSegMins = 0;
+            let liveDeltaMins = null;
 
-            for (let i = origIdx; i < destIdx; i++) {
-              const s1 = currentRenderedStops[i];
-              const s2 = currentRenderedStops[i+1];
-              const rawDist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
-              
-              const roadDist = rawDist ? (rawDist * 1.35) : null;
-
-              if (roadDist && roadDist > 0.05) {
-                if (roadDist > 2.5) {
-                  totalSegMins += (roadDist / 45.0) * 60;
-                } else if (roadDist > 1.2) {
-                  totalSegMins += (roadDist / 28.0) * 60;
-                } else {
-                  totalSegMins += (roadDist / 14.0) * 60;
-                }
-              } else {
-                totalSegMins += 2.2;
-              }
-
-              totalSegMins += 0.7;
-
-              const stopName = (s2?.name_tc || '') + ' ' + (s2?.name_en || '');
-              if (/轉車站|巴士轉乘|收費廣場|過海隧道|Tunnel|Interchange|Terminus|總站/i.test(stopName)) {
-                totalSegMins += 1.2;
-              }
-            }
-
-            let calculatedMins = Math.max(Math.ceil(stopCount * 2.0), Math.round(totalSegMins));
-
-            if (stopCount <= 5 && uniqueOrigEtas.length > 0) {
+            // Tier 1: Try Primary Live Telemetry Delta between Destination and Origin
+            try {
               const rawDestEtas = await fetchStopRawEtas(currentDestStop);
-              const formattedDestEtas = rawDestEtas
+              const validDestEtas = rawDestEtas
                 .filter(item => isValidRealtimeEta(item, targetDirStr, origTc, destTc, now))
-                .map(item => ({ company: (item.co || '').toUpperCase(), rawTime: parseEtaToDate(item, now)?.getTime() || 0 }))
-                .filter(item => item.rawTime > 0);
+                .map(item => parseEtaToDate(item, now)?.getTime() || 0)
+                .filter(t => t > 0)
+                .sort((a, b) => a - b);
 
-              const minPhysicalMs = Math.max(90000, stopCount * 90000);
-              const maxMs = stopCount * 360000;
+              if (uniqueOrigEtas.length > 0 && validDestEtas.length > 0) {
+                const minAllowedMs = Math.max(120000, stopCount * 120000); // Floor 2 mins/stop
+                const maxAllowedMs = stopCount * 420000; // Max 7 mins/stop
 
-              for (const oEta of uniqueOrigEtas) {
-                const match = formattedDestEtas.find(dEta => {
-                  const diff = dEta.rawTime - oEta.rawTime;
-                  return diff >= minPhysicalMs && diff <= maxMs;
-                });
-                if (match) {
-                  const liveMins = Math.round((match.rawTime - oEta.rawTime) / 60000);
-                  if (liveMins >= Math.ceil(stopCount * 1.5)) {
-                    calculatedMins = liveMins;
-                    break;
+                for (const oEta of uniqueOrigEtas) {
+                  const oTime = oEta.rawTime;
+                  const matchingDestTime = validDestEtas.find(dTime => {
+                    const diff = dTime - oTime;
+                    return diff >= minAllowedMs && diff <= maxAllowedMs;
+                  });
+
+                  if (matchingDestTime) {
+                    const candidateLiveMins = Math.round((matchingDestTime - oTime) / 60000);
+                    if (candidateLiveMins >= Math.ceil(stopCount * 2.0)) {
+                      liveDeltaMins = candidateLiveMins;
+                      break;
+                    }
                   }
                 }
               }
+            } catch (e) {
+              console.warn("Live ETA delta calculation fallback to transit model", e);
             }
 
-            travelTimeText.textContent = t('travelTimeEstimate', { mins: calculatedMins, stops: stopCount });
+            if (liveDeltaMins && liveDeltaMins >= Math.ceil(stopCount * 2.0)) {
+              travelTimeText.textContent = t('travelTimeEstimate', { mins: liveDeltaMins, stops: stopCount });
+            } else {
+              // Tier 2: Calibrated HK Bus Transit Routing Model (Google Maps Equivalent)
+              let totalSegMins = 0;
+
+              for (let i = origIdx; i < destIdx; i++) {
+                const s1 = currentRenderedStops[i];
+                const s2 = currentRenderedStops[i+1];
+                const rawDist = getHaversineDistanceKm(s1?.lat, s1?.long, s2?.lat, s2?.long);
+                
+                // 1.45x Road curvature & flyover geometry factor
+                const roadDist = rawDist ? (rawDist * 1.45) : null;
+
+                if (roadDist && roadDist > 0.05) {
+                  if (roadDist > 3.0) {
+                    totalSegMins += (roadDist / 40.0) * 60; // Highway / Expressway (~40 km/h)
+                  } else if (roadDist > 1.5) {
+                    totalSegMins += (roadDist / 24.0) * 60; // Suburban Arterial (~24 km/h)
+                  } else {
+                    totalSegMins += (roadDist / 12.0) * 60; // Dense Urban Street (~12 km/h)
+                  }
+                } else {
+                  totalSegMins += 2.5; // Baseline stop-to-stop physical driving floor
+                }
+
+                // Dwell time + Traffic light wait per intermediate stop (1.3 mins = 78s)
+                totalSegMins += 1.3;
+
+                // Tunnel & Major Bottlenecks Buffer
+                const s2Name = (s2?.name_tc || '') + ' ' + (s2?.name_en || '');
+                if (/過海隧道|紅磡海底隧道|東區海底隧道|西區海底隧道|Cross Harbour Tunnel|Eastern Harbour Crossing|Western Harbour Crossing/i.test(s2Name)) {
+                  totalSegMins += 6.0; // Cross-harbour tunnel toll & queue buffer
+                } else if (/大欖隧道|大老山隧道|獅子山隧道|城門隧道|將軍澳隧道|尖山隧道|屯門赤鱲角|Tai Lam Tunnel|Tate's Cairn|Lion Rock|Shing Mun|Tseung Kwan O|Tsing Sha/i.test(s2Name)) {
+                  totalSegMins += 4.0; // Major HK Tunnel buffer
+                } else if (/轉車站|巴士轉乘|收費廣場|Interchange|Toll Plaza/i.test(s2Name)) {
+                  totalSegMins += 3.0; // Major Bus Interchange buffer
+                }
+              }
+
+              // Strict floor: HK bus trips take at least 2.5 mins per stop gap
+              const minimumFloorMins = Math.ceil(stopCount * 2.5);
+              const finalMins = Math.max(minimumFloorMins, Math.round(totalSegMins));
+
+              travelTimeText.textContent = t('travelTimeEstimate', { mins: finalMins, stops: stopCount });
+            }
           }
         }
 
