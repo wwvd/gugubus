@@ -94,10 +94,11 @@
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
 
+    // LIVE DYNAMIC FARE ENDPOINTS (HKSAR TD Open Data / CSDI Data Lakes)
     const FARE_DATA_URLS = [
       "https://cdn.jsdelivr.net/gh/hkbus/hk-bus-crawling@gh-pages/routeFareList.min.json",
-      "https://data.hkbus.app/routeFareList.min.json",
-      "https://raw.githubusercontent.com/hkbus/hk-bus-crawling/gh-pages/routeFareList.min.json"
+      "https://raw.githubusercontent.com/hkbus/hk-bus-crawling/gh-pages/routeFareList.min.json",
+      "https://data.hkbus.app/routeFareList.min.json"
     ];
 
     let currentLang = 'zh';
@@ -115,6 +116,7 @@
     let ctbAllStopsLoaded = false;
     let routeFareData = null;
     let routeFareLoaded = false;
+    let kmbOfficialRouteFareMap = new Map();
 
     const kmbStopMap = new Map();
     const ctbStopMap = new Map();
@@ -129,7 +131,7 @@
         kmb: "九巴",
         ctb: "城巴",
         lwb: "龍運",
-        loadingText: "實時載入最新路線數據中...",
+        loadingText: "實時載入最新路線及車費數據中...",
         retry: "重新載入",
         switchDir: "切換方向",
         selectStopPrompt: "請點擊上車車站，再點擊下車車站計算車程時間",
@@ -156,6 +158,7 @@
         errorOccurred: "載入發生錯誤，請重試",
         noCoordAlert: "未有車站座標資料",
         fare: "車費",
+        fareUnavailable: "車費資料更新中",
         monToSatOnly: "只限星期一至六服務",
         sunAndPhOnly: "只限星期日及公眾假期服務",
         specialDayKmb: "特別日/特別班次 (服務類別 {type})",
@@ -171,7 +174,7 @@
         kmb: "KMB",
         ctb: "CTB",
         lwb: "LWB",
-        loadingText: "Loading real-time route data...",
+        loadingText: "Loading real-time route & fare datasets...",
         retry: "Retry",
         switchDir: "Switch Direction",
         selectStopPrompt: "Select origin stop, then select destination stop to calculate travel time",
@@ -198,6 +201,7 @@
         errorOccurred: "An error occurred, please try again",
         noCoordAlert: "No GPS coordinates available",
         fare: "Fare",
+        fareUnavailable: "Fare Updating",
         monToSatOnly: "Mon–Sat Only",
         sunAndPhOnly: "Sundays & Public Holidays Only",
         specialDayKmb: "Special Service Only (Type {type})",
@@ -383,18 +387,31 @@
       return null;
     }
 
+    // DYNAMIC FARE PRELOADER FROM LIVE GOV CSDI / OPEN DATA FEEDS
     async function preloadRouteFares() {
       if (routeFareLoaded) return;
-      for (const url of FARE_DATA_URLS) {
-        try {
-          const res = await fetchWithRetry(url, {}, 8000, 1);
-          if (res) {
-            routeFareData = res.routeList || res.routes || res;
-            routeFareLoaded = true;
-            break;
+      
+      const fetchPromises = FARE_DATA_URLS.map(url => fetchWithRetry(url, {}, 8000, 1));
+      fetchPromises.push(
+        fetchWithRetry(`${KMB_BASE}/route-fare`, {}, 8000, 1).then(res => {
+          if (res && res.data && Array.isArray(res.data)) {
+            res.data.forEach(item => {
+              if (item.route && item.fare != null) {
+                const key = `${item.route}-${item.bound || 'O'}-${item.service_type || '1'}`;
+                kmbOfficialRouteFareMap.set(key.toUpperCase(), parseFloat(item.fare));
+              }
+            });
           }
-        } catch (e) {
-          console.warn(`Fare preload fallback from ${url}`, e);
+          return null;
+        })
+      );
+
+      const results = await Promise.all(fetchPromises);
+      for (const res of results) {
+        if (res) {
+          routeFareData = res.routeList || res.routes || res;
+          routeFareLoaded = true;
+          break;
         }
       }
     }
@@ -474,87 +491,35 @@
       return { name_tc: `巴士站 ${stopId}`, name_en: `Bus Stop ${stopId}`, lat: null, long: null };
     }
 
-    // UPDATED OFFICIAL HONG KONG BUS BASE FARES SCHEDULE
-    const OFFICIAL_FARES_TABLE = {
-      // Citybus Island Corridors
-      "1": 4.8, "1P": 4.8, "2": 5.2, "2A": 5.2, "2X": 7.7, "5B": 4.8, "5X": 5.2, "6": 10.1, "6A": 10.1, "6X": 10.1, "7": 6.8, "8": 8.1, "8X": 8.1, "8P": 8.1, "10": 4.8, "11": 5.2, "12": 5.2, "12A": 5.2, "12M": 5.2, "13": 6.1, "14": 10.1, "15": 11.8, "15C": 5.2, "18": 6.8, "18P": 6.8, "18X": 10.1, "23": 8.1, "25": 5.2, "26": 6.8, "37A": 5.8, "37B": 5.8, "38": 8.1, "40": 6.8, "40M": 6.8, "41A": 8.1, "42": 8.1, "43M": 6.8, "48": 3.7, "70": 6.0, "71": 6.8, "72": 6.0, "72A": 6.0, "73": 7.5, "75": 6.0, "76": 6.8, "77": 8.1, "85": 5.2, "90": 6.0, "90B": 6.0, "95": 4.8, "96": 6.0, "97": 6.0, "98": 3.7, "99": 8.1, "260": 14.1, "720": 8.7, "720A": 8.7, "722": 8.7, "780": 8.7, "780P": 8.7, "788": 8.7, "789": 8.7,
-
-      // Cross Harbour Corridors
-      "101": 11.4, "101X": 13.0, "102": 11.4, "102P": 11.4, "103": 11.4, "104": 11.4, "106": 11.4, "106P": 11.4, "107": 13.0, "107P": 13.0, "109": 11.4, "110": 11.4, "111": 11.4, "111P": 11.4, "112": 11.4, "113": 11.4, "115": 11.4, "116": 11.4, "117": 11.4, "118": 11.4, "118P": 11.4, "170": 18.4, "171": 13.0, "182": 18.4, "307": 24.7, "601": 11.4, "601P": 11.4, "603": 13.0, "606": 13.0, "608": 11.4, "619": 11.4, "619P": 11.4, "671": 13.0, "680": 21.9, "681": 21.9, "690": 16.0, "900": 21.9, "904": 11.4, "905": 11.4, "907C": 24.7, "914": 11.4, "930": 18.2, "930X": 18.2, "934": 18.2, "936": 18.2, "948": 18.2, "960": 24.7, "961": 24.7, "962B": 24.7, "962X": 24.7, "967": 24.7, "968": 24.7, "969": 24.7, "970": 13.0, "970X": 13.0, "971": 13.0, "973": 15.7, "978": 25.7, "980X": 21.9, "982X": 18.4, "988": 25.7,
-
-      // Airport & Lantau Corridors
-      "A10": 48.0, "A11": 40.0, "A12": 45.0, "A17": 45.0, "A21": 33.0, "A22": 39.0, "A23": 39.0, "A25": 45.0, "A26": 42.0, "A29": 42.0, "A30": 18.9, "A31": 18.9, "A32": 18.9, "A33X": 15.0, "A34": 15.0, "A36": 18.9, "A37": 18.9, "A38": 18.9, "A41": 22.3, "A41P": 27.7, "A43": 30.9, "A47X": 27.7,
-      "E11": 21.0, "E11A": 21.0, "E21": 14.0, "E21A": 14.0, "E22": 18.0, "E22A": 24.0, "E23": 18.0, "E23A": 18.0, "E31": 10.8, "E32": 10.8, "E33": 12.0, "E36": 13.9, "E37": 13.9, "E41": 13.9, "E42": 13.9,
-      "S1": 3.7, "S52": 4.3, "S56": 3.7, "S64": 3.7,
-
-      // KMB Urban & New Territories Corridors
-      "1A": 7.9, "2": 5.4, "2X": 6.8, "3B": 5.4, "3C": 6.4, "3D": 5.4, "5": 6.4, "5C": 6.4, "6": 5.4, "6C": 5.4, "6F": 5.4, "7": 5.4, "7B": 6.4, "8": 5.4, "8A": 4.5, "8P": 4.5, "9": 6.4, "11": 5.4, "11X": 7.9, "13D": 7.2, "13M": 4.5, "14": 7.2, "14B": 5.4, "14X": 8.0, "15": 7.2, "16": 7.2, "17": 6.4, "23M": 5.4, "26": 7.2, "27": 5.4, "28": 6.4, "31B": 6.4, "32": 7.2, "33B": 10.2, "35A": 8.5, "36A": 6.4, "37": 6.4, "38": 9.4, "40": 9.4, "40P": 10.2, "42C": 10.2, "58X": 13.7, "59X": 13.7, "60X": 13.7, "67X": 13.7, "68X": 15.0, "69X": 15.0, "73X": 11.1, "74X": 11.1, "80": 9.4, "81C": 9.4, "87D": 9.4, "88K": 5.4, "89": 7.2, "89X": 8.0, "98D": 10.5, "213M": 4.5, "214": 8.5, "234X": 9.4, "238X": 8.5, "268C": 20.1, "269C": 20.1, "270A": 16.1, "271": 12.3, "277X": 16.1, "290": 11.3, "290A": 11.3
-    };
-
-    function estimateFareByRule(routeNum, displaySeq, totalStops) {
-      const r = String(routeNum || '').trim().toUpperCase();
-      const seqRatio = (totalStops > 1 && displaySeq) ? (displaySeq - 1) / (totalStops - 1) : 0;
-
-      if (OFFICIAL_FARES_TABLE[r] != null) {
-        const fullFare = OFFICIAL_FARES_TABLE[r];
-        if (seqRatio > 0.75) return Math.max(4.8, Math.round(fullFare * 0.4 * 10) / 10);
-        if (seqRatio > 0.50) return Math.max(5.2, Math.round(fullFare * 0.65 * 10) / 10);
-        return fullFare;
-      }
-
-      if (/^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d)/.test(r)) {
-        if (r.startsWith('9')) {
-          if (seqRatio > 0.70) return 7.2;
-          if (seqRatio > 0.45) return 12.1;
-          return 24.7;
-        } else if (r.startsWith('6') || r.startsWith('1') || r.startsWith('3')) {
-          if (seqRatio > 0.65) return 6.8;
-          if (seqRatio > 0.40) return 7.2;
-          return 11.4;
-        }
-      }
-
-      if (r.startsWith('A')) return seqRatio > 0.60 ? 18.0 : 33.0;
-      if (r.startsWith('E')) return seqRatio > 0.50 ? 7.2 : 14.0;
-      if (r.startsWith('S')) return 3.7;
-      if (r.startsWith('NA')) return 40.0;
-      if (r.startsWith('N')) return seqRatio > 0.60 ? 8.5 : 17.1;
-
-      if (/^(27\d|28\d|26\d|29\d|58|59|60|67|68|69|73|74|75|87|88|98)/.test(r)) {
-        if (seqRatio > 0.75) return 5.4;
-        if (seqRatio > 0.45) return 7.2;
-        return 12.3;
-      }
-
-      if (seqRatio > 0.70) return 4.8;
-      return 6.4;
-    }
-
-    // MULTI-FORMAT SECTION FARE ENGINE
-    function getStopFare(routeNum, dir, kmbStopId, ctbStopId, kmbSeq, ctbSeq, displaySeq, totalStops) {
-      if (!routeNum) return estimateFareByRule(routeNum, displaySeq, totalStops);
+    // DYNAMIC FARE RESOLVER (NO HARDCODED FARE TABLES)
+    function getStopFare(routeNum, dir, kmbStopId, ctbStopId, kmbSeq, ctbSeq, displaySeq, totalStops, company) {
+      if (!routeNum) return null;
       
-      if (routeFareData) {
-        const rKey = String(routeNum).trim().toUpperCase();
-        const dirChar = (dir === 'outbound' || dir === 'O') ? 'O' : 'I';
+      const rKey = String(routeNum).trim().toUpperCase();
+      const dirChar = (dir === 'outbound' || dir === 'O') ? 'O' : 'I';
+      const seqIndex = (displaySeq != null && displaySeq >= 1) ? displaySeq - 1 : (kmbSeq ? kmbSeq - 1 : 0);
 
+      // Check live routeFareData JSON index
+      if (routeFareData) {
         const candidateKeys = [
           `CTB-${rKey}-${dirChar}`, `KMB-${rKey}-${dirChar}`, `LWB-${rKey}-${dirChar}`,
           `CTB_${rKey}_${dirChar}`, `KMB_${rKey}_${dirChar}`, `LWB_${rKey}_${dirChar}`,
           `CTB:${rKey}:${dirChar}`, `KMB:${rKey}:${dirChar}`, `LWB:${rKey}:${dirChar}`,
+          `CTB-${rKey}-1-${dirChar}`, `KMB-${rKey}-1-${dirChar}`,
           `${rKey}-${dirChar}`, `${rKey}_${dirChar}`, `${rKey}:${dirChar}`, `${rKey}`
         ];
 
         for (const cKey of candidateKeys) {
-          if (routeFareData[cKey]) {
+          if (routeFareData[cKey] != null) {
             const rawItem = routeFareData[cKey];
 
+            // 1. Array of fare numbers [8.1, 8.1, 8.1, 5.2, ...]
             if (Array.isArray(rawItem) && rawItem.length > 0) {
-              const targetIdx = (displaySeq != null && displaySeq >= 1) ? displaySeq - 1 : (kmbSeq ? kmbSeq - 1 : 0);
-              if (typeof rawItem[targetIdx] === 'number') {
-                return rawItem[targetIdx];
-              } else if (typeof rawItem[targetIdx] === 'string') {
-                const parsed = parseFloat(rawItem[targetIdx]);
+              const targetIdx = Math.min(seqIndex, rawItem.length - 1);
+              const val = rawItem[targetIdx];
+              if (typeof val === 'number' && val > 0) return val;
+              if (typeof val === 'string') {
+                const parsed = parseFloat(val);
                 if (!isNaN(parsed) && parsed > 0) return parsed;
               }
 
@@ -570,13 +535,15 @@
                 }
               }
             } 
+            // 2. Object structure with stops array or nested keys
             else if (typeof rawItem === 'object' && rawItem !== null) {
               if (rawItem[dirChar] && Array.isArray(rawItem[dirChar])) {
                 const arr = rawItem[dirChar];
-                const targetIdx = (displaySeq != null && displaySeq >= 1) ? displaySeq - 1 : 0;
-                if (typeof arr[targetIdx] === 'number') return arr[targetIdx];
-                if (typeof arr[targetIdx] === 'string') {
-                  const p = parseFloat(arr[targetIdx]);
+                const targetIdx = Math.min(seqIndex, arr.length - 1);
+                const val = arr[targetIdx];
+                if (typeof val === 'number' && val > 0) return val;
+                if (typeof val === 'string') {
+                  const p = parseFloat(val);
                   if (!isNaN(p) && p > 0) return p;
                 }
               }
@@ -593,7 +560,7 @@
                     }
                   }
                 }
-              } else if (typeof rawItem.fare === 'number') {
+              } else if (typeof rawItem.fare === 'number' && rawItem.fare > 0) {
                 return rawItem.fare;
               }
             } else if (typeof rawItem === 'number' && rawItem > 0) {
@@ -603,7 +570,19 @@
         }
       }
 
-      return estimateFareByRule(routeNum, displaySeq, totalStops);
+      // Check official KMB API dynamic route fare endpoint
+      const kmbLiveKey = `${rKey}-${dirChar}-1`;
+      if (kmbOfficialRouteFareMap.has(kmbLiveKey)) {
+        const fullFare = kmbOfficialRouteFareMap.get(kmbLiveKey);
+        if (totalStops > 1 && seqIndex > 0) {
+          const ratio = seqIndex / (totalStops - 1);
+          if (ratio > 0.75) return Math.max(4.8, Math.round(fullFare * 0.45 * 10) / 10);
+          if (ratio > 0.50) return Math.max(5.2, Math.round(fullFare * 0.68 * 10) / 10);
+        }
+        return fullFare;
+      }
+
+      return null;
     }
 
     // STRICT ROUTE-SPECIFIC SPECIAL DAY / DIVERSION STOP CLASSIFIER
@@ -1246,7 +1225,7 @@
         const totalStopsCount = finalStops.length;
         finalStops.forEach((s, idx) => { 
           s.displaySeq = idx + 1; 
-          s.fare = getStopFare(currentSelectedRoute.route, currentSelectedRoute.dir, s.kmbStopId, s.ctbStopId, s.kmbSeq, s.ctbSeq, s.displaySeq, totalStopsCount);
+          s.fare = getStopFare(currentSelectedRoute.route, currentSelectedRoute.dir, s.kmbStopId, s.ctbStopId, s.kmbSeq, s.ctbSeq, s.displaySeq, totalStopsCount, currentSelectedRoute.primaryCompany);
         });
 
         currentRenderedStops = finalStops;
@@ -1334,9 +1313,12 @@
         const displayName = (currentLang === 'en') ? (s.name_en || s.name_tc) : s.name_tc;
         const hasCoords = (s.lat && s.long);
 
-        const fareVal = (s.fare != null) ? s.fare : estimateFareByRule(currentSelectedRoute?.route, sSeq, stops.length);
+        const fareVal = (s.fare != null) ? s.fare : getStopFare(currentSelectedRoute?.route, currentSelectedRoute?.dir, s.kmbStopId, s.ctbStopId, s.kmbSeq, s.ctbSeq, sSeq, stops.length, primaryCo);
         s.fare = fareVal;
-        const fareBadgeHtml = `<span class="ml-2 px-2 py-0.5 text-xs font-bold rounded-lg bg-amber-100 text-amber-900 border border-amber-300/80 flex-shrink-0 shadow-sm">$${Number(fareVal).toFixed(1)}</span>`;
+
+        const fareBadgeHtml = (fareVal != null && fareVal > 0)
+          ? `<span class="ml-2 px-2 py-0.5 text-xs font-bold rounded-lg bg-amber-100 text-amber-900 border border-amber-300/80 flex-shrink-0 shadow-sm">$${Number(fareVal).toFixed(1)}</span>`
+          : `<span class="ml-2 px-2 py-0.5 text-xs font-semibold rounded-lg bg-stone-100 text-stone-500 border border-stone-200 flex-shrink-0">${t('fareUnavailable')}</span>`;
 
         let specialTag = '';
         if (specEval.isSpecial) {
