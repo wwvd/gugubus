@@ -62,7 +62,7 @@
 
     <!-- Search & Company Filter Section -->
     <div id="searchSection" class="bg-white p-4 rounded-2xl shadow-sm border border-amber-200/70 mb-4 space-y-3">
-      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 8X, 101, A21, E33)..." 
+      <input type="text" id="searchInput" oninput="filterRoutes()" placeholder="搜尋路線 (例如 1, 1A, 18X, 101, A21, E33)..." 
         class="w-full px-4 py-2 border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-700 focus:border-amber-700 bg-amber-50/20 placeholder-stone-400">
       
       <!-- Company Filter Pills -->
@@ -94,7 +94,6 @@
     const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
     const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
 
-    // MULTI-MIRROR OPEN DATA FARE DATASETS
     const FARE_DATA_URLS = [
       "https://cdn.jsdelivr.net/gh/hkbus/hk-bus-crawling@gh-pages/routeFareList.min.json",
       "https://raw.githubusercontent.com/hkbus/hk-bus-crawling/gh-pages/routeFareList.min.json",
@@ -126,7 +125,7 @@
         appTitle: "Gugubus 香港巴士實時到站查詢",
         appTitleStopList: "路線 {route} 車站列表",
         backBtn: "返回路線",
-        searchPlaceholder: "搜尋路線 (例如 1, 8X, 101, A21, E33)...",
+        searchPlaceholder: "搜尋路線 (例如 1, 1A, 18X, 101, A21, E33)...",
         all: "全部",
         kmb: "九巴",
         ctb: "城巴",
@@ -159,19 +158,19 @@
         noCoordAlert: "未有車站座標資料",
         fare: "車費",
         fareUnavailable: "車費資料更新中",
-        monToSatOnly: "只限星期一至六特定時段服務",
-        sunAndPhOnly: "只限星期日及公眾假期特定時段服務",
+        monToSatOnly: "🗓️ 星期一至六特定時段車站",
+        sunAndPhOnly: "🗓️ 假日改道車站",
         morningPeakBadge: "🌅 晨早特別班次時段",
         eveningPeakBadge: "🌆 傍晚特別班次時段",
-        specialTimeBadge: "⏰ 特定時段/特別班次車站",
+        specialTimeBadge: "⏰ 特定時段限定車站",
         peakOnlyBadge: "⚡ 繁忙時間限定車站",
-        racecourseBadge: "賽馬日特別班次"
+        racecourseBadge: "🏇 賽馬日特別服務"
       },
       en: {
         appTitle: "Gugubus HK Bus Real-Time ETA",
         appTitleStopList: "Route {route} Stops",
         backBtn: "Back to Routes",
-        searchPlaceholder: "Search route (e.g. 1, 8X, 101, A21, E33)...",
+        searchPlaceholder: "Search route (e.g. 1, 1A, 18X, 101, A21, E33)...",
         all: "All",
         kmb: "KMB",
         ctb: "CTB",
@@ -204,13 +203,13 @@
         noCoordAlert: "No GPS coordinates available",
         fare: "Fare",
         fareUnavailable: "Fare Updating",
-        monToSatOnly: "Mon–Sat Special Hours Only",
-        sunAndPhOnly: "Sundays & Public Holidays Special Hours Only",
+        monToSatOnly: "🗓️ Mon–Sat Special Hours Stop",
+        sunAndPhOnly: "🗓️ Holiday Diversion Stop",
         morningPeakBadge: "🌅 Morning Peak Special Hours",
         eveningPeakBadge: "🌆 Evening Peak Special Hours",
         specialTimeBadge: "⏰ Special Hours Only",
         peakOnlyBadge: "⚡ Peak Hours Only",
-        racecourseBadge: "Raceday Special Service"
+        racecourseBadge: "🏇 Raceday Special Service"
       }
     };
 
@@ -391,7 +390,6 @@
       return null;
     }
 
-    // DYNAMIC FARE PRELOADER FROM MULTIPLE REPOS AND KMB OPENAPI
     async function preloadRouteFares() {
       if (routeFareLoaded) return;
       
@@ -465,59 +463,68 @@
     }
 
     async function getStopDetail(company, stopId) {
-      if (company === 'KMB' || company === 'LWB') {
-        if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 6000, 2);
-        if (res && res.data) {
-          const info = { 
-            name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
-            name_en: res.data.name_en || res.data.name_tc || `Bus Stop ${stopId}`,
-            lat: parseFloat(res.data.lat) || null, 
-            long: parseFloat(res.data.long) || null 
-          };
-          kmbStopMap.set(stopId, info);
-          return info;
+      if (!stopId) return { name_tc: "巴士站", name_en: "Bus Stop", lat: null, long: null };
+      try {
+        if (company === 'KMB' || company === 'LWB') {
+          if (kmbStopMap.has(stopId)) return kmbStopMap.get(stopId);
+          const res = await fetchWithRetry(`${KMB_BASE}/stop/${stopId}`, {}, 4000, 1);
+          if (res && res.data) {
+            const info = { 
+              name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
+              name_en: res.data.name_en || res.data.name_tc || `Bus Stop ${stopId}`,
+              lat: parseFloat(res.data.lat) || null, 
+              long: parseFloat(res.data.long) || null 
+            };
+            kmbStopMap.set(stopId, info);
+            return info;
+          }
+        } else if (company === 'CTB') {
+          if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
+          const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 4000, 1);
+          if (res && res.data) {
+            const info = { 
+              name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
+              name_en: res.data.name_en || res.data.name_tc || `Bus Stop ${stopId}`,
+              lat: parseFloat(res.data.lat) || null, 
+              long: parseFloat(res.data.long) || null 
+            };
+            ctbStopMap.set(stopId, info);
+            return info;
+          }
         }
-      } else if (company === 'CTB') {
-        if (ctbStopMap.has(stopId)) return ctbStopMap.get(stopId);
-        const res = await fetchWithRetry(`${CTB_BASE}/stop/${stopId}`, {}, 6000, 2);
-        if (res && res.data) {
-          const info = { 
-            name_tc: res.data.name_tc || res.data.name_en || `巴士站 ${stopId}`, 
-            name_en: res.data.name_en || res.data.name_tc || `Bus Stop ${stopId}`,
-            lat: parseFloat(res.data.lat) || null, 
-            long: parseFloat(res.data.long) || null 
-          };
-          ctbStopMap.set(stopId, info);
-          return info;
-        }
+      } catch (e) {
+        console.warn("getStopDetail error", e);
       }
       return { name_tc: `巴士站 ${stopId}`, name_en: `Bus Stop ${stopId}`, lat: null, long: null };
     }
 
-    // DYNAMIC & ROBUST MULTI-SCHEMA FARE RESOLVER
-    function getStopFare(routeNum, dir, kmbStopId, ctbStopId, kmbSeq, ctbSeq, displaySeq, totalStops, company) {
+    // OPERATOR-SPECIFIC FARE RESOLVER
+    function getCompanySpecificFare(company, routeNum, dir, stopId, seq, displaySeq, totalStops) {
       if (!routeNum) return null;
       
       const rKey = String(routeNum).trim().toUpperCase();
       const dirChar = (dir === 'outbound' || dir === 'O') ? 'O' : 'I';
-      const seqIndex = (displaySeq != null && displaySeq >= 1) ? displaySeq - 1 : (kmbSeq ? kmbSeq - 1 : 0);
+      const seqIndex = (displaySeq != null && displaySeq >= 1) ? displaySeq - 1 : (seq ? seq - 1 : 0);
+      const coPrefix = company ? company.toUpperCase() : '';
 
-      // Search all dataset structures dynamically
       if (routeFareData) {
-        const candidateKeys = [
-          `CTB-${rKey}-${dirChar}`, `KMB-${rKey}-${dirChar}`, `LWB-${rKey}-${dirChar}`,
-          `CTB_${rKey}_${dirChar}`, `KMB_${rKey}_${dirChar}`, `LWB_${rKey}_${dirChar}`,
-          `CTB:${rKey}:${dirChar}`, `KMB:${rKey}:${dirChar}`, `LWB:${rKey}:${dirChar}`,
-          `CTB-${rKey}`, `KMB-${rKey}`, `LWB-${rKey}`,
+        const primaryKeys = coPrefix ? [
+          `${coPrefix}-${rKey}-${dirChar}`,
+          `${coPrefix}_${rKey}_${dirChar}`,
+          `${coPrefix}:${rKey}:${dirChar}`,
+          `${coPrefix}-${rKey}`
+        ] : [];
+
+        const fallbackKeys = [
           `${rKey}-${dirChar}`, `${rKey}_${dirChar}`, `${rKey}:${dirChar}`, `${rKey}`
         ];
 
-        for (const cKey of candidateKeys) {
+        const keysToSearch = [...primaryKeys, ...fallbackKeys];
+
+        for (const cKey of keysToSearch) {
           if (routeFareData[cKey] != null) {
             const rawItem = routeFareData[cKey];
 
-            // Structure 1: Array of fare numbers or strings
             if (Array.isArray(rawItem) && rawItem.length > 0) {
               const targetIdx = Math.min(seqIndex, rawItem.length - 1);
               const val = rawItem[targetIdx];
@@ -528,12 +535,10 @@
                 if (!isNaN(parsed) && parsed > 0) return parsed;
               }
 
-              // Structure 2: Array of stop-level objects
               for (const sItem of rawItem) {
                 if (typeof sItem === 'object' && sItem !== null) {
-                  const matchId = (kmbStopId && (sItem.stop === kmbStopId || sItem.stopId === kmbStopId)) ||
-                                  (ctbStopId && (sItem.stop === ctbStopId || sItem.stopId === ctbStopId));
-                  const matchSeq = (kmbSeq != null && sItem.seq === kmbSeq) || (ctbSeq != null && sItem.seq === ctbSeq) || (sItem.seq === displaySeq);
+                  const matchId = stopId && (sItem.stop === stopId || sItem.stopId === stopId);
+                  const matchSeq = (seq != null && sItem.seq === seq) || (sItem.seq === displaySeq);
                   if (matchId || matchSeq) {
                     const f = parseFloat(sItem.fare || sItem.adultFare || sItem.price);
                     if (!isNaN(f) && f > 0) return f;
@@ -541,7 +546,6 @@
                 }
               }
             } 
-            // Structure 3: Keyed direction object
             else if (typeof rawItem === 'object' && rawItem !== null) {
               const dirArr = rawItem[dirChar] || rawItem[dir === 'outbound' ? 'outbound' : 'inbound'];
               if (dirArr && Array.isArray(dirArr)) {
@@ -557,9 +561,8 @@
               if (Array.isArray(stopArray)) {
                 for (const sItem of stopArray) {
                   if (typeof sItem === 'object' && sItem !== null) {
-                    const matchId = (kmbStopId && (sItem.stop === kmbStopId || sItem.stopId === kmbStopId)) ||
-                                    (ctbStopId && (sItem.stop === ctbStopId || sItem.stopId === ctbStopId));
-                    const matchSeq = (kmbSeq != null && sItem.seq === kmbSeq) || (ctbSeq != null && sItem.seq === ctbSeq) || (sItem.seq === displaySeq);
+                    const matchId = stopId && (sItem.stop === stopId || sItem.stopId === stopId);
+                    const matchSeq = (seq != null && sItem.seq === seq) || (sItem.seq === displaySeq);
                     if (matchId || matchSeq) {
                       const f = parseFloat(sItem.fare || sItem.adultFare || sItem.price);
                       if (!isNaN(f) && f > 0) return f;
@@ -576,56 +579,33 @@
         }
       }
 
-      // Check official KMB API route fare endpoint
-      const kmbLiveKey = `${rKey}-${dirChar}-1`;
-      if (kmbOfficialRouteFareMap.has(kmbLiveKey)) {
-        const fullFare = kmbOfficialRouteFareMap.get(kmbLiveKey);
-        if (totalStops > 1 && seqIndex > 0) {
-          const ratio = seqIndex / (totalStops - 1);
-          if (ratio > 0.75) return Math.max(4.8, Math.round(fullFare * 0.45 * 10) / 10);
-          if (ratio > 0.50) return Math.max(5.2, Math.round(fullFare * 0.68 * 10) / 10);
+      if (coPrefix === 'KMB' || coPrefix === 'LWB') {
+        const kmbLiveKey = `${rKey}-${dirChar}-1`;
+        if (kmbOfficialRouteFareMap.has(kmbLiveKey)) {
+          const fullFare = kmbOfficialRouteFareMap.get(kmbLiveKey);
+          if (totalStops > 1 && seqIndex > 0) {
+            const ratio = seqIndex / (totalStops - 1);
+            if (ratio > 0.75) return Math.max(4.8, Math.round(fullFare * 0.45 * 10) / 10);
+            if (ratio > 0.50) return Math.max(5.2, Math.round(fullFare * 0.68 * 10) / 10);
+          }
+          return fullFare;
         }
-        return fullFare;
-      }
-
-      // Dynamic Section Fare Fallback Algorithm based on Route ID & Section position
-      let baseFare = null;
-      if (rKey === '8X' || rKey === '8P') baseFare = 8.1;
-      else if (rKey === '2X') baseFare = 7.7;
-      else if (rKey === '1' || rNum === '5B' || rNum === '10') baseFare = 4.8;
-      else if (rKey === '2' || rKey === '2A' || rKey === '8' || rKey === '11' || rKey === '25') baseFare = 5.2;
-      else if (rKey === '18X' || rKey === '260') baseFare = 10.1;
-      else if (rKey === '720' || rKey === '722' || rKey === '780' || rKey === '788' || rKey === '789') baseFare = 8.7;
-      else if (rKey.startsWith('A')) baseFare = 33.0;
-      else if (rKey.startsWith('E')) baseFare = 14.0;
-      else if (rKey.startsWith('S')) baseFare = 3.7;
-      else if (/^(1\d\d|3\d\d|6\d\d|8\d\d)/.test(rKey)) baseFare = 11.4;
-      else if (rKey.startsWith('9')) baseFare = 24.7;
-
-      if (baseFare != null) {
-        if (totalStops > 1 && seqIndex > 0) {
-          const ratio = seqIndex / (totalStops - 1);
-          if (ratio > 0.75) return Math.max(4.8, Math.round(baseFare * 0.5 * 10) / 10);
-          if (ratio > 0.50) return Math.max(5.2, Math.round(baseFare * 0.75 * 10) / 10);
-        }
-        return baseFare;
       }
 
       return null;
     }
 
-    // SPECIAL TIME-OF-DAY & SPECIAL DEPARTURE CLASSIFIER
+    // GENERIC TIME-OF-DAY & SPECIAL DEPARTURE CLASSIFIER (APPLIED TO ALL ROUTES)
     function checkIsSpecialDayOrTimeStop(stop, primaryCompany, serviceType, routeNum) {
       const tcName = String(stop.name_tc || '');
       const enName = String(stop.name_en || '');
       const combined = (tcName + ' ' + enName).toLowerCase();
       const rNum = String(routeNum || '').trim().toUpperCase();
 
-      // 1. Chater Road Pedestrian Zone Time-Restricted Diversions
       const isSunPhDiversion = combined.includes('歷山大廈') || combined.includes('alexandra house') ||
                                combined.includes('遮打花園') || combined.includes('chater garden');
 
-      if (isSunPhDiversion && (rNum === '1' || rNum === '5B' || rNum === '10' || rNum === '11' || rNum === '12' || rNum === '13' || rNum === '15' || rNum === '18' || rNum === '26')) {
+      if (isSunPhDiversion) {
         return {
           isSpecial: true,
           badgeTextKey: 'sunAndPhOnly',
@@ -636,7 +616,7 @@
       const isMonSatOnly = combined.includes('遮打道') || combined.includes('chater road') ||
                            (combined.includes('皇后像廣場') && (combined.includes('遮打') || combined.includes('chater')));
 
-      if (isMonSatOnly && (rNum === '1' || rNum === '5B' || rNum === '10' || rNum === '11' || rNum === '12' || rNum === '13' || rNum === '15' || rNum === '18' || rNum === '26')) {
+      if (isMonSatOnly) {
         return {
           isSpecial: true,
           badgeTextKey: 'monToSatOnly',
@@ -644,8 +624,7 @@
         };
       }
 
-      // 2. Racecourse Dedicated Services
-      if (isRacecourseDedicatedRoute(rNum)) {
+      if (isRacecourseDedicatedRoute(rNum) || combined.includes('馬場') || combined.includes('racecourse')) {
         return {
           isSpecial: true,
           badgeTextKey: 'racecourseBadge',
@@ -653,7 +632,6 @@
         };
       }
 
-      // 3. Time-of-Day Specific Peak Variants (KMB / CTB Service Types)
       const st = String(stop.specialServiceType || serviceType || '1');
       if (st === '2') {
         return {
@@ -675,7 +653,6 @@
         };
       }
 
-      // 4. Peak-Only Stop Name Keywords (e.g., School Day / Peak Hour Stops)
       if (combined.includes('特別班次') || combined.includes('時段') || combined.includes('學校') || combined.includes('繁忙時間')) {
         return {
           isSpecial: true,
@@ -893,9 +870,8 @@
       } else if (currentOriginStop && !currentDestStop) {
         const origSeq = currentOriginStop.displaySeq || currentOriginStop.seq;
         const origName = (currentLang === 'en') ? (currentOriginStop.name_en || currentOriginStop.name_tc) : currentOriginStop.name_tc;
-        const fareTag = currentOriginStop.fare != null ? `<span class="ml-2 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-bold border border-amber-300 shadow-sm">${t('fare')}: $${Number(currentOriginStop.fare).toFixed(1)}</span>` : '';
-
-        stopInfoEl.innerHTML = `<div><span class="text-emerald-700 font-bold">${t('originPrefix')}</span>${origSeq}. ${origName}${fareTag}</div><div class="text-xs text-stone-500 font-normal mt-0.5">${t('selectDestPrompt')}</div>`;
+        
+        stopInfoEl.innerHTML = `<div><span class="text-emerald-700 font-bold">${t('originPrefix')}</span>${origSeq}. ${origName}</div><div class="text-xs text-stone-500 font-normal mt-0.5">${t('selectDestPrompt')}</div>`;
         resetBtn.classList.remove('hidden');
         travelTimeBox.classList.add('hidden');
       } else {
@@ -903,11 +879,10 @@
         const origName = (currentLang === 'en') ? (currentOriginStop.name_en || currentOriginStop.name_tc) : currentOriginStop.name_tc;
         const destSeq = currentDestStop.displaySeq || currentDestStop.seq;
         const destName = (currentLang === 'en') ? (currentDestStop.name_en || currentDestStop.name_tc) : currentDestStop.name_tc;
-        const fareTag = currentOriginStop.fare != null ? `<span class="ml-2 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-bold border border-amber-300 shadow-sm">${t('fare')}: $${Number(currentOriginStop.fare).toFixed(1)}</span>` : '';
 
         stopInfoEl.innerHTML = `
           <div class="space-y-0.5 text-xs sm:text-sm">
-            <div><span class="text-emerald-700 font-bold">${t('originPrefix')}</span>${origSeq}. ${origName}${fareTag}</div>
+            <div><span class="text-emerald-700 font-bold">${t('originPrefix')}</span>${origSeq}. ${origName}</div>
             <div><span class="text-rose-700 font-bold">${t('destPrefix')}</span>${destSeq}. ${destName}</div>
           </div>
         `;
@@ -946,60 +921,6 @@
       
       updateInfoCardUI();
       loadStopsForCurrentRoute();
-    }
-
-    function getCompanyDir(company, targetDir, targetOrig, targetDest, variants) {
-      const coVariants = variants.filter(v => v.company === company);
-      if (coVariants.length === 0) return null;
-
-      const targetBoundChar = (targetDir === 'inbound') ? 'I' : 'O';
-
-      const exactMatch = coVariants.find(v => 
-        v.bound === targetBoundChar || 
-        (v.bound && v.bound.toLowerCase() === targetDir.toLowerCase())
-      );
-      if (exactMatch) {
-        return { 
-          dir: (exactMatch.bound === 'O' || exactMatch.bound === 'outbound') ? 'outbound' : 'inbound', 
-          serviceType: '1' 
-        };
-      }
-
-      const cOrig = cleanStopName(targetOrig);
-      for (const v of coVariants) {
-        const vOrig = cleanStopName(v.origTc);
-        if (vOrig && cOrig && (vOrig.includes(cOrig) || cOrig.includes(vOrig))) {
-          const boundStr = (v.bound === 'O' || v.bound === 'outbound') ? 'outbound' : 'inbound';
-          return { dir: boundStr, serviceType: '1' };
-        }
-      }
-
-      return { dir: targetDir, serviceType: '1' };
-    }
-
-    function alignCtbDirection(kmbStops, ctbOutStops, ctbInStops, kmbOrigTc, kmbDestTc) {
-      if (!ctbOutStops.length && !ctbInStops.length) return 'outbound';
-      if (!ctbOutStops.length) return 'inbound';
-      if (!ctbInStops.length) return 'outbound';
-
-      const kmbStart = cleanStopName(kmbOrigTc || (kmbStops[0]?.name_tc));
-      const kmbEnd = cleanStopName(kmbDestTc || (kmbStops[kmbStops.length - 1]?.name_tc));
-
-      const outStart = cleanStopName(ctbOutStops[0]?.name_tc);
-      const outEnd = cleanStopName(ctbOutStops[ctbOutStops.length - 1]?.name_tc);
-
-      const inStart = cleanStopName(ctbInStops[0]?.name_tc);
-      const inEnd = cleanStopName(ctbInStops[ctbInStops.length - 1]?.name_tc);
-
-      let outScore = 0;
-      if (kmbStart && outStart && (kmbStart.includes(outStart) || outStart.includes(kmbStart))) outScore += 2;
-      if (kmbEnd && outEnd && (kmbEnd.includes(outEnd) || outEnd.includes(kmbEnd))) outScore += 2;
-
-      let inScore = 0;
-      if (kmbStart && inStart && (kmbStart.includes(inStart) || inStart.includes(kmbStart))) inScore += 2;
-      if (kmbEnd && inEnd && (kmbEnd.includes(inEnd) || inEnd.includes(kmbEnd))) inScore += 2;
-
-      return (inScore > outScore) ? 'inbound' : 'outbound';
     }
 
     function matchJointStops(kmbStops, ctbStops) {
@@ -1157,6 +1078,7 @@
       return true;
     }
 
+    // UNIVERSAL DYNAMIC STOP LOADER FOR ALL ROUTES
     async function loadStopsForCurrentRoute() {
       showLoading(true);
       const stopListEl = document.getElementById('stopListView');
@@ -1168,91 +1090,117 @@
         let kmbStopsDetailed = [];
         let ctbStopsDetailed = [];
 
-        const isJoint = route.companies.includes('CTB') || isJointRouteNumber(route.route);
-
+        // 1. POPULATE KMB / LWB STOPS
         if (route.companies.includes('KMB') || route.companies.includes('LWB')) {
-          const kmbConfig = getCompanyDir('KMB', route.dir, route.origTc, route.destTc, route.variants) || 
-                            getCompanyDir('LWB', route.dir, route.origTc, route.destTc, route.variants);
-          if (kmbConfig) {
-            const resMain = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/1`, {}, 6000, 2);
-            const rawMainStops = (resMain && resMain.data) || [];
+          const targetDir = route.dir; 
+          const kmbBoundParam = (targetDir === 'inbound') ? 'inbound' : 'outbound';
+          
+          let resMain = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbBoundParam}/1`, {}, 7000, 2);
+          let rawMainStops = (resMain && resMain.data) || [];
 
-            const sortedMainStops = [...rawMainStops].sort((a, b) => a.seq - b.seq);
+          if (rawMainStops.length === 0) {
+            const altDir = (kmbBoundParam === 'outbound') ? 'inbound' : 'outbound';
+            const resAlt = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${altDir}/1`, {}, 5000, 2);
+            if (resAlt && resAlt.data && resAlt.data.length > 0) {
+              rawMainStops = resAlt.data;
+            }
+          }
 
-            kmbStopsDetailed = await Promise.all(sortedMainStops.map(async (s) => {
-              const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
-              return { 
-                stopId: s.stop, 
-                seq: s.seq, 
-                name_tc: info.name_tc, 
-                name_en: info.name_en, 
-                lat: info.lat, 
-                long: info.long, 
-                isSpecialDayStop: false 
-              };
-            }));
+          rawMainStops.sort((a, b) => a.seq - b.seq);
 
-            const specialVariants = route.variants.filter(v => (v.company === 'KMB' || v.company === 'LWB') && String(v.serviceType) !== '1');
-            for (const spVar of specialVariants) {
-              const resSp = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${spVar.serviceType}`, {}, 5000, 2);
-              const rawSpStops = (resSp && resSp.data) || [];
-              for (const spS of rawSpStops) {
-                const existingIndex = kmbStopsDetailed.findIndex(existing => existing.stopId === spS.stop);
-                if (existingIndex === -1) {
-                  const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', spS.stop);
-                  kmbStopsDetailed.push({
-                    stopId: spS.stop,
-                    seq: spS.seq,
-                    name_tc: info.name_tc,
-                    name_en: info.name_en,
-                    lat: info.lat,
-                    long: info.long,
-                    isSpecialDayStop: true,
-                    specialServiceType: spVar.serviceType,
-                    specialCompany: spVar.company
-                  });
-                } else {
-                  kmbStopsDetailed[existingIndex].hasSpecialVariant = true;
-                }
+          kmbStopsDetailed = await Promise.all(rawMainStops.map(async (s) => {
+            const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
+            return { 
+              stopId: s.stop, 
+              seq: s.seq, 
+              name_tc: info.name_tc, 
+              name_en: info.name_en, 
+              lat: info.lat, 
+              long: info.long, 
+              isSpecialDayStop: false,
+              specialServiceType: '1'
+            };
+          }));
+
+          const specialVariants = route.variants.filter(v => (v.company === 'KMB' || v.company === 'LWB') && String(v.serviceType) !== '1');
+          for (const spVar of specialVariants) {
+            const resSp = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbBoundParam}/${spVar.serviceType}`, {}, 5000, 2);
+            const rawSpStops = (resSp && resSp.data) || [];
+            for (const spS of rawSpStops) {
+              const existingIndex = kmbStopsDetailed.findIndex(existing => existing.stopId === spS.stop);
+              if (existingIndex === -1) {
+                const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', spS.stop);
+                kmbStopsDetailed.push({
+                  stopId: spS.stop,
+                  seq: spS.seq,
+                  name_tc: info.name_tc,
+                  name_en: info.name_en,
+                  lat: info.lat,
+                  long: info.long,
+                  isSpecialDayStop: true,
+                  specialServiceType: spVar.serviceType,
+                  specialCompany: spVar.company
+                });
+              } else {
+                kmbStopsDetailed[existingIndex].hasSpecialVariant = true;
               }
             }
-            kmbStopsDetailed.sort((a, b) => a.seq - b.seq);
           }
+          kmbStopsDetailed.sort((a, b) => a.seq - b.seq);
         }
 
-        if (isJoint) {
-          const [resOut, resIn] = await Promise.all([
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/outbound`, {}, 6000, 2),
-            fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/inbound`, {}, 6000, 2)
-          ]);
+        // 2. POPULATE CITYBUS STOPS
+        if (route.companies.includes('CTB')) {
+          const targetDir = route.dir;
+          const ctbBoundParam = (targetDir === 'inbound') ? 'inbound' : 'outbound';
 
-          const rawOut = (resOut && resOut.data) || [];
-          const rawIn = (resIn && resIn.data) || [];
+          let resCtb = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${ctbBoundParam}`, {}, 7000, 2);
+          let rawCtbStops = (resCtb && resCtb.data) || [];
 
-          const ctbOutStopsDetailed = await Promise.all(rawOut.map(async (s) => {
+          if (rawCtbStops.length === 0) {
+            const altDir = (ctbBoundParam === 'outbound') ? 'inbound' : 'outbound';
+            const resAlt = await fetchWithRetry(`${CTB_BASE}/route-stop/CTB/${route.route}/${altDir}`, {}, 5000, 2);
+            if (resAlt && resAlt.data && resAlt.data.length > 0) {
+              rawCtbStops = resAlt.data;
+            }
+          }
+
+          rawCtbStops.sort((a, b) => a.seq - b.seq);
+
+          ctbStopsDetailed = await Promise.all(rawCtbStops.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
-            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long, specialCompany: 'CTB' };
+            return { 
+              stopId: s.stop, 
+              seq: s.seq, 
+              name_tc: info.name_tc, 
+              name_en: info.name_en, 
+              lat: info.lat, 
+              long: info.long, 
+              specialCompany: 'CTB'
+            };
           }));
-
-          const ctbInStopsDetailed = await Promise.all(rawIn.map(async (s) => {
-            const info = await getStopDetail('CTB', s.stop);
-            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long, specialCompany: 'CTB' };
-          }));
-
-          const ctbAlignedDir = alignCtbDirection(kmbStopsDetailed, ctbOutStopsDetailed, ctbInStopsDetailed, route.origTc, route.destTc);
-          currentSelectedRoute.ctbMatchedDir = ctbAlignedDir;
-
-          ctbStopsDetailed = (ctbAlignedDir === 'inbound') ? ctbInStopsDetailed : ctbOutStopsDetailed;
-        } else {
-          currentSelectedRoute.ctbMatchedDir = route.dir;
         }
 
         currentSelectedRoute.kmbStopsDetailed = kmbStopsDetailed;
         currentSelectedRoute.ctbStopsDetailed = ctbStopsDetailed;
 
         let finalStops = [];
-        if (kmbStopsDetailed.length > 0) {
+        if (kmbStopsDetailed.length > 0 && ctbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
+        } else if (kmbStopsDetailed.length > 0) {
+          finalStops = kmbStopsDetailed.map(s => ({ 
+            seq: s.seq, 
+            kmbSeq: s.seq, 
+            ctbSeq: null, 
+            name_tc: s.name_tc, 
+            name_en: s.name_en, 
+            kmbStopId: s.stopId, 
+            lat: s.lat, 
+            long: s.long, 
+            isSpecialDayStop: s.isSpecialDayStop || false,
+            specialServiceType: s.specialServiceType || null,
+            specialCompany: s.specialCompany || 'KMB'
+          }));
         } else if (ctbStopsDetailed.length > 0) {
           finalStops = ctbStopsDetailed.map(s => ({ 
             seq: s.seq, 
@@ -1270,7 +1218,6 @@
         const totalStopsCount = finalStops.length;
         finalStops.forEach((s, idx) => { 
           s.displaySeq = idx + 1; 
-          s.fare = getStopFare(currentSelectedRoute.route, currentSelectedRoute.dir, s.kmbStopId, s.ctbStopId, s.kmbSeq, s.ctbSeq, s.displaySeq, totalStopsCount, currentSelectedRoute.primaryCompany);
         });
 
         currentRenderedStops = finalStops;
@@ -1313,6 +1260,7 @@
 
       const origSeq = currentOriginStop ? (currentOriginStop.displaySeq || currentOriginStop.seq) : -1;
       const destSeq = currentDestStop ? (currentDestStop.displaySeq || currentDestStop.seq) : -1;
+      const isJointRoute = currentSelectedRoute?.companies.length > 1;
 
       stops.forEach(s => {
         const sSeq = s.displaySeq || s.seq;
@@ -1350,12 +1298,32 @@
         const displayName = (currentLang === 'en') ? (s.name_en || s.name_tc) : s.name_tc;
         const hasCoords = (s.lat && s.long);
 
-        const fareVal = (s.fare != null) ? s.fare : getStopFare(currentSelectedRoute?.route, currentSelectedRoute?.dir, s.kmbStopId, s.ctbStopId, s.kmbSeq, s.ctbSeq, sSeq, stops.length, primaryCo);
-        s.fare = fareVal;
+        // OPERATOR-SPECIFIC FARE COMPUTATION
+        let kmbFare = null;
+        let ctbFare = null;
 
-        const fareBadgeHtml = (fareVal != null && fareVal > 0)
-          ? `<span class="ml-2 px-2 py-0.5 text-xs font-bold rounded-lg bg-amber-100 text-amber-900 border border-amber-300/80 flex-shrink-0 shadow-sm">$${Number(fareVal).toFixed(1)}</span>`
-          : `<span class="ml-2 px-2 py-0.5 text-xs font-semibold rounded-lg bg-stone-100 text-stone-500 border border-stone-200 flex-shrink-0">${t('fareUnavailable')}</span>`;
+        if (s.kmbStopId || currentSelectedRoute?.companies.includes('KMB') || currentSelectedRoute?.companies.includes('LWB')) {
+          kmbFare = getCompanySpecificFare(currentSelectedRoute?.companies.includes('LWB') ? 'LWB' : 'KMB', currentSelectedRoute?.route, currentSelectedRoute?.dir, s.kmbStopId, s.kmbSeq, sSeq, stops.length);
+        }
+        if (s.ctbStopId || currentSelectedRoute?.companies.includes('CTB')) {
+          ctbFare = getCompanySpecificFare('CTB', currentSelectedRoute?.route, currentSelectedRoute?.ctbMatchedDir || currentSelectedRoute?.dir, s.ctbStopId, s.ctbSeq, sSeq, stops.length);
+        }
+
+        let fareBadgeHtml = '';
+        if (isJointRoute && kmbFare != null && ctbFare != null && Math.abs(kmbFare - ctbFare) > 0.05) {
+          // Display operator-differentiated fares on joint routes when prices differ
+          fareBadgeHtml = `
+            <span class="ml-2 px-1.5 py-0.5 text-xs font-bold rounded bg-red-100 text-red-900 border border-red-300 shadow-sm flex-shrink-0">${t('kmb')}: $${Number(kmbFare).toFixed(1)}</span>
+            <span class="ml-1 px-1.5 py-0.5 text-xs font-bold rounded bg-amber-100 text-amber-950 border border-amber-300 shadow-sm flex-shrink-0">${t('ctb')}: $${Number(ctbFare).toFixed(1)}</span>
+          `;
+        } else {
+          const displayFare = kmbFare || ctbFare;
+          if (displayFare != null && displayFare > 0) {
+            fareBadgeHtml = `<span class="ml-2 px-2 py-0.5 text-xs font-bold rounded-lg bg-amber-100 text-amber-900 border border-amber-300/80 flex-shrink-0 shadow-sm">$${Number(displayFare).toFixed(1)}</span>`;
+          } else {
+            fareBadgeHtml = `<span class="ml-2 px-2 py-0.5 text-xs font-semibold rounded-lg bg-stone-100 text-stone-500 border border-stone-200 flex-shrink-0">${t('fareUnavailable')}</span>`;
+          }
+        }
 
         let specialTag = '';
         if (specEval.isSpecial) {
@@ -1413,7 +1381,7 @@
     async function fetchStopRawEtas(stop) {
       let fetchPromises = [];
       const routeIsLwb = isLwbRoute(currentSelectedRoute.route) || (currentSelectedRoute.companies.includes('LWB') && !currentSelectedRoute.companies.includes('KMB'));
-      const isJoint = currentSelectedRoute.companies.includes('CTB') || isJointRouteNumber(currentSelectedRoute.route);
+      const isJoint = currentSelectedRoute.companies.length > 1;
 
       let kmbId = stop.kmbStopId;
       let ctbId = stop.ctbStopId;
@@ -1459,7 +1427,7 @@
         );
       }
 
-      if (isJoint && ctbId) {
+      if (ctbId) {
         fetchPromises.push(
           fetchWithRetry(`${CTB_BASE}/eta/CTB/${ctbId}/${currentSelectedRoute.route}`, {}, 4000, 2)
             .then(res => ((res && res.data) || []).map(item => ({
