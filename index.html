@@ -156,7 +156,9 @@
         errorOccurred: "載入發生錯誤，請重試",
         noCoordAlert: "未有車站座標資料",
         fare: "車費",
-        specialDayBadge: "特別日車站"
+        specialDayKmb: "特別日/特別班次 (九巴 服務類別 {type})",
+        specialDayCtb: "特別日子服務 (只限指定日子)",
+        specialDayGeneric: "只限指定日子/特別班次服務"
       },
       en: {
         appTitle: "Gugubus HK Bus Real-Time ETA",
@@ -194,7 +196,9 @@
         errorOccurred: "An error occurred, please try again",
         noCoordAlert: "No GPS coordinates available",
         fare: "Fare",
-        specialDayBadge: "Special Day Stop"
+        specialDayKmb: "Special Days Only (KMB Service Type {type})",
+        specialDayCtb: "Special Day Service Only",
+        specialDayGeneric: "Special Days / Special Runs Only"
       }
     };
 
@@ -529,27 +533,6 @@
       return estimateFareByRule(routeNum, displaySeq, totalStops);
     }
 
-    // Dynamic Special Service Active Status Checker
-    async function checkSpecialServiceActive(routeNum, dir, serviceType) {
-      if (String(serviceType) === '1') return true;
-
-      const now = new Date();
-      const day = now.getDay();
-      const isWeekendOrHoliday = (day === 0 || day === 6);
-
-      try {
-        const res = await fetchWithRetry(`${KMB_BASE}/eta-route/${routeNum}/${serviceType}`, {}, 3000, 1);
-        if (res && Array.isArray(res.data) && res.data.length > 0) {
-          const hasActiveEta = res.data.some(item => item.eta && new Date(item.eta).getTime() > now.getTime());
-          if (hasActiveEta) return true;
-        }
-      } catch (e) {
-        console.warn(`Special service active check fallback for ${routeNum} service ${serviceType}`, e);
-      }
-
-      return isWeekendOrHoliday;
-    }
-
     window.addEventListener('DOMContentLoaded', fetchAllRoutes);
 
     async function fetchAllRoutes() {
@@ -877,7 +860,9 @@
             ctbStopId: s.stopId,
             lat: s.lat,
             long: s.long,
-            isSpecialDayStop: s.isSpecialDayStop || false
+            isSpecialDayStop: s.isSpecialDayStop || false,
+            specialServiceType: s.specialServiceType || null,
+            specialCompany: s.specialCompany || 'CTB'
           }));
         }
         return [];
@@ -892,7 +877,9 @@
           kmbStopId: s.stopId, 
           lat: s.lat, 
           long: s.long,
-          isSpecialDayStop: s.isSpecialDayStop || false 
+          isSpecialDayStop: s.isSpecialDayStop || false,
+          specialServiceType: s.specialServiceType || null,
+          specialCompany: s.specialCompany || 'KMB'
         }));
       }
 
@@ -957,7 +944,9 @@
           ctbStopId: ctbId,
           lat: kStop.lat || ctbLat,
           long: kStop.long || ctbLong,
-          isSpecialDayStop: kStop.isSpecialDayStop || false
+          isSpecialDayStop: kStop.isSpecialDayStop || false,
+          specialServiceType: kStop.specialServiceType || null,
+          specialCompany: kStop.specialCompany || 'KMB'
         };
       });
     }
@@ -1039,30 +1028,40 @@
 
             kmbStopsDetailed = await Promise.all(sortedMainStops.map(async (s) => {
               const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', s.stop);
-              return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long, isSpecialDayStop: false };
+              return { 
+                stopId: s.stop, 
+                seq: s.seq, 
+                name_tc: info.name_tc, 
+                name_en: info.name_en, 
+                lat: info.lat, 
+                long: info.long, 
+                isSpecialDayStop: false 
+              };
             }));
 
-            // Check if special day service types (service_type > 1) exist and are active today
+            // Include all special day variants (service_type > 1) and mark them clearly
             const specialVariants = route.variants.filter(v => (v.company === 'KMB' || v.company === 'LWB') && String(v.serviceType) !== '1');
             for (const spVar of specialVariants) {
-              const isActiveToday = await checkSpecialServiceActive(route.route, kmbConfig.dir, spVar.serviceType);
-              if (isActiveToday) {
-                const resSp = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${spVar.serviceType}`, {}, 5000, 2);
-                const rawSpStops = (resSp && resSp.data) || [];
-                for (const spS of rawSpStops) {
-                  const exists = kmbStopsDetailed.some(existing => existing.stopId === spS.stop);
-                  if (!exists) {
-                    const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', spS.stop);
-                    kmbStopsDetailed.push({
-                      stopId: spS.stop,
-                      seq: spS.seq,
-                      name_tc: info.name_tc,
-                      name_en: info.name_en,
-                      lat: info.lat,
-                      long: info.long,
-                      isSpecialDayStop: true
-                    });
-                  }
+              const resSp = await fetchWithRetry(`${KMB_BASE}/route-stop/${route.route}/${kmbConfig.dir}/${spVar.serviceType}`, {}, 5000, 2);
+              const rawSpStops = (resSp && resSp.data) || [];
+              for (const spS of rawSpStops) {
+                const existingIndex = kmbStopsDetailed.findIndex(existing => existing.stopId === spS.stop);
+                if (existingIndex === -1) {
+                  const info = await getStopDetail(route.companies.includes('LWB') ? 'LWB' : 'KMB', spS.stop);
+                  kmbStopsDetailed.push({
+                    stopId: spS.stop,
+                    seq: spS.seq,
+                    name_tc: info.name_tc,
+                    name_en: info.name_en,
+                    lat: info.lat,
+                    long: info.long,
+                    isSpecialDayStop: true,
+                    specialServiceType: spVar.serviceType,
+                    specialCompany: spVar.company
+                  });
+                } else {
+                  // If stop is part of both standard & special run, retain reference
+                  kmbStopsDetailed[existingIndex].hasSpecialVariant = true;
                 }
               }
             }
@@ -1081,12 +1080,12 @@
 
           const ctbOutStopsDetailed = await Promise.all(rawOut.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
-            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
+            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long, isSpecialDayStop: false };
           }));
 
           const ctbInStopsDetailed = await Promise.all(rawIn.map(async (s) => {
             const info = await getStopDetail('CTB', s.stop);
-            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long };
+            return { stopId: s.stop, seq: s.seq, name_tc: info.name_tc, name_en: info.name_en, lat: info.lat, long: info.long, isSpecialDayStop: false };
           }));
 
           const ctbAlignedDir = alignCtbDirection(kmbStopsDetailed, ctbOutStopsDetailed, ctbInStopsDetailed, route.origTc, route.destTc);
@@ -1104,7 +1103,17 @@
         if (kmbStopsDetailed.length > 0) {
           finalStops = matchJointStops(kmbStopsDetailed, ctbStopsDetailed);
         } else if (ctbStopsDetailed.length > 0) {
-          finalStops = ctbStopsDetailed.map(s => ({ seq: s.seq, kmbSeq: null, ctbSeq: s.seq, name_tc: s.name_tc, name_en: s.name_en, ctbStopId: s.stopId, lat: s.lat, long: s.long, isSpecialDayStop: false }));
+          finalStops = ctbStopsDetailed.map(s => ({ 
+            seq: s.seq, 
+            kmbSeq: null, 
+            ctbSeq: s.seq, 
+            name_tc: s.name_tc, 
+            name_en: s.name_en, 
+            ctbStopId: s.stopId, 
+            lat: s.lat, 
+            long: s.long, 
+            isSpecialDayStop: false 
+          }));
         }
 
         const totalStopsCount = finalStops.length;
@@ -1173,6 +1182,9 @@
         } else if (inBetween) {
           cardStyle += "border-amber-300 bg-amber-50/40 hover:border-amber-400";
           badgeStyle += "bg-amber-200 text-amber-900 border-amber-300";
+        } else if (s.isSpecialDayStop) {
+          cardStyle += "border-purple-300 bg-purple-50/30 hover:border-purple-400";
+          badgeStyle += "bg-purple-100 text-purple-900 border-purple-300";
         } else {
           cardStyle += "border-amber-200/60 hover:border-amber-500 hover:bg-amber-50/30";
           badgeStyle += "bg-amber-100 text-amber-800 border-amber-200";
@@ -1190,7 +1202,15 @@
 
         let specialTag = '';
         if (s.isSpecialDayStop) {
-          specialTag = `<span class="ml-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-purple-100 text-purple-900 border border-purple-300 shadow-sm flex-shrink-0">${t('specialDayBadge')}</span>`;
+          let specMsg = '';
+          if (s.specialCompany === 'KMB' || s.specialCompany === 'LWB') {
+            specMsg = t('specialDayKmb', { type: s.specialServiceType || '2' });
+          } else if (s.specialCompany === 'CTB') {
+            specMsg = t('specialDayCtb');
+          } else {
+            specMsg = t('specialDayGeneric');
+          }
+          specialTag = `<span class="ml-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-purple-100 text-purple-900 border border-purple-300/80 shadow-sm flex-shrink-0">${specMsg}</span>`;
         }
 
         let stopTag = '';
@@ -1278,8 +1298,9 @@
 
       if (kmbId) {
         const defaultTag = routeIsLwb ? 'LWB' : 'KMB';
+        const serviceTypeToFetch = stop.specialServiceType || '1';
         fetchPromises.push(
-          fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/1`, {}, 4000, 2)
+          fetchWithRetry(`${KMB_BASE}/eta/${kmbId}/${currentSelectedRoute.route}/${serviceTypeToFetch}`, {}, 4000, 2)
             .then(res => ((res && res.data) || []).map(item => ({
               ...item,
               apiSource: 'KMB_API',
