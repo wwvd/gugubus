@@ -158,9 +158,9 @@
         fare: "車費",
         monToSatOnly: "只限星期一至六服務",
         sunAndPhOnly: "只限星期日及公眾假期服務",
-        specialDayKmb: "特別日/特別班次 (九巴 服務類別 {type})",
-        specialDayCtb: "特別日/特別班次車站 (城巴)",
-        specialDayGeneric: "特別日/特別班次車站"
+        specialDayKmb: "特別日/特別班次 (服務類別 {type})",
+        specialDayCtb: "特別日/特別班次",
+        specialDayGeneric: "特別日/特別班次"
       },
       en: {
         appTitle: "Gugubus HK Bus Real-Time ETA",
@@ -200,9 +200,9 @@
         fare: "Fare",
         monToSatOnly: "Mon–Sat Only",
         sunAndPhOnly: "Sundays & Public Holidays Only",
-        specialDayKmb: "Special Runs Only (KMB Type {type})",
-        specialDayCtb: "Special Days / Special Runs (CTB)",
-        specialDayGeneric: "Special Days / Special Runs Only"
+        specialDayKmb: "Special Service Only (Type {type})",
+        specialDayCtb: "Special Service Only",
+        specialDayGeneric: "Special Service Only"
       }
     };
 
@@ -276,6 +276,12 @@
       const r = String(routeNum).trim().toUpperCase();
       if (/^(1\d\d|3\d\d|6\d\d|8\d\d|9\d\d|N1\d\d|N3\d\d|N6\d\d|N8\d\d|N9\d\d|X9\d\d)/.test(r)) return false;
       return /^(A\d|E\d|NA\d|S\d|R\d|N30|N31|N39|N42|N64|X33|X34|X36|X43|X47)/.test(r);
+    }
+
+    function isRacecourseDedicatedRoute(routeNum) {
+      if (!routeNum) return false;
+      const r = String(routeNum).trim().toUpperCase();
+      return /^(848|868|869|872|872X|887|888|889|891|893|101R|102R|811)$/i.test(r);
     }
 
     function isCircularRoute(route) {
@@ -468,13 +474,13 @@
       return { name_tc: `巴士站 ${stopId}`, name_en: `Bus Stop ${stopId}`, lat: null, long: null };
     }
 
-    // ACCURATE HK TRANSPORT DEPARTMENT / CSDI PUBLISHED FARE TABLE
+    // ACCURATE PUBLISHED HONG KONG BUS FARE SCHEDULE
     const OFFICIAL_FARES_TABLE = {
-      // Citybus Island Urban & Southern District Corridors
-      "1": 4.8, "1P": 4.8, "2": 5.2, "2A": 5.2, "2X": 7.2, "5B": 4.4, "5X": 5.2, "6": 10.1, "6A": 10.1, "6X": 10.1, "7": 6.8, "8": 5.2, "8X": 7.2, "10": 4.4, "11": 5.2, "12": 5.2, "12A": 5.2, "12M": 5.2, "13": 6.1, "14": 10.1, "15": 11.8, "15C": 5.2, "18": 6.8, "18P": 6.8, "18X": 10.1, "23": 8.1, "25": 5.2, "26": 6.8, "37A": 5.8, "37B": 5.8, "38": 8.1, "40": 6.8, "40M": 6.8, "41A": 8.1, "42": 8.1, "43M": 6.8, "48": 3.7, "70": 6.0, "71": 6.8, "72": 6.0, "72A": 6.0, "73": 7.5, "75": 6.0, "76": 6.8, "77": 8.1, "85": 5.2, "90": 6.0, "90B": 6.0, "95": 4.4, "96": 6.0, "97": 6.0, "98": 3.7, "99": 8.1, "260": 14.1, "720": 8.1, "722": 8.1, "780": 8.1, "788": 8.1, "789": 8.1,
+      // Citybus Urban & Southern Corridors
+      "1": 4.8, "1P": 4.8, "2": 5.2, "2A": 5.2, "2X": 7.2, "5B": 4.8, "5X": 5.2, "6": 10.1, "6A": 10.1, "6X": 10.1, "7": 6.8, "8": 5.2, "8X": 7.2, "10": 4.8, "11": 5.2, "12": 5.2, "12A": 5.2, "12M": 5.2, "13": 6.1, "14": 10.1, "15": 11.8, "15C": 5.2, "18": 6.8, "18P": 6.8, "18X": 10.1, "23": 8.1, "25": 5.2, "26": 6.8, "37A": 5.8, "37B": 5.8, "38": 8.1, "40": 6.8, "40M": 6.8, "41A": 8.1, "42": 8.1, "43M": 6.8, "48": 3.7, "70": 6.0, "71": 6.8, "72": 6.0, "72A": 6.0, "73": 7.5, "75": 6.0, "76": 6.8, "77": 8.1, "85": 5.2, "90": 6.0, "90B": 6.0, "95": 4.8, "96": 6.0, "97": 6.0, "98": 3.7, "99": 8.1, "260": 14.1, "720": 8.1, "722": 8.1, "780": 8.1, "788": 8.1, "789": 8.1,
 
       // Cross Harbour Corridors (1XX, 3XX, 6XX, 9XX)
-      "101": 11.4, "101X": 13.0, "102": 11.4, "102P": 11.4, "103": 11.4, "104": 11.4, "106": 11.4, "106P": 11.4, "107": 13.0, "107P": 13.0, "109": 11.4, "110": 11.4, "111": 11.4, "111P": 11.4, "112": 11.4, "113": 11.4, "115": 11.4, "116": 11.4, "117": 11.4, "118": 11.4, "118P": 11.4, "170": 18.4, "171": 13.0, "182": 18.4, "307": 24.7, "601": 11.4, "601P": 11.4, "603": 13.0, "606": 13.0, "608": 11.4, "619": 11.4, "619P": 11.4, "671": 13.0, "680": 21.9, "681": 21.9, "690": 16.0, "900": 21.9, "904": 11.4, "905": 11.4, "907C": 24.7, "914": 11.4, "930": 18.2, "930X": 18.2, "934": 18.2, "936": 18.2, "948": 18.2, "960": 21.9, "961": 21.9, "962B": 21.9, "962X": 21.9, "967": 24.7, "968": 24.7, "969": 24.7, "970": 13.0, "970X": 13.0, "971": 13.0, "973": 15.7, "978": 25.7, "980X": 21.9, "982X": 18.4, "988": 25.7,
+      "101": 11.4, "101X": 13.0, "102": 11.4, "102P": 11.4, "103": 11.4, "104": 11.4, "106": 11.4, "106P": 11.4, "107": 13.0, "107P": 13.0, "109": 11.4, "110": 11.4, "111": 11.4, "111P": 11.4, "112": 11.4, "113": 11.4, "115": 11.4, "116": 11.4, "117": 11.4, "118": 11.4, "118P": 11.4, "170": 18.4, "171": 13.0, "182": 18.4, "307": 24.7, "601": 11.4, "601P": 11.4, "603": 13.0, "606": 13.0, "608": 11.4, "619": 11.4, "619P": 11.4, "671": 13.0, "680": 21.9, "681": 21.9, "690": 16.0, "900": 21.9, "904": 11.4, "905": 11.4, "907C": 24.7, "914": 11.4, "930": 18.2, "930X": 18.2, "934": 18.2, "936": 18.2, "948": 18.2, "960": 24.7, "961": 24.7, "962B": 24.7, "962X": 24.7, "967": 24.7, "968": 24.7, "969": 24.7, "970": 13.0, "970X": 13.0, "971": 13.0, "973": 15.7, "978": 25.7, "980X": 21.9, "982X": 18.4, "988": 25.7,
 
       // Airport & Lantau Corridors
       "A10": 48.0, "A11": 40.0, "A12": 45.0, "A17": 45.0, "A21": 33.0, "A22": 39.0, "A23": 39.0, "A25": 45.0, "A26": 42.0, "A29": 42.0, "A30": 18.9, "A31": 18.9, "A32": 18.9, "A33X": 15.0, "A34": 15.0, "A36": 18.9, "A37": 18.9, "A38": 18.9, "A41": 22.3, "A41P": 27.7, "A43": 30.9, "A47X": 27.7,
@@ -491,7 +497,7 @@
 
       if (OFFICIAL_FARES_TABLE[r] != null) {
         const fullFare = OFFICIAL_FARES_TABLE[r];
-        if (seqRatio > 0.75) return Math.max(4.4, Math.round(fullFare * 0.4 * 10) / 10);
+        if (seqRatio > 0.75) return Math.max(4.8, Math.round(fullFare * 0.4 * 10) / 10);
         if (seqRatio > 0.50) return Math.max(5.2, Math.round(fullFare * 0.65 * 10) / 10);
         return fullFare;
       }
@@ -500,7 +506,7 @@
         if (r.startsWith('9')) {
           if (seqRatio > 0.70) return 7.2;
           if (seqRatio > 0.45) return 12.1;
-          return 25.7;
+          return 24.7;
         } else if (r.startsWith('6') || r.startsWith('1') || r.startsWith('3')) {
           if (seqRatio > 0.65) return 6.8;
           if (seqRatio > 0.40) return 7.2;
@@ -508,7 +514,7 @@
         }
       }
 
-      if (r.startsWith('A')) return seqRatio > 0.60 ? 18.0 : 39.0;
+      if (r.startsWith('A')) return seqRatio > 0.60 ? 18.0 : 33.0;
       if (r.startsWith('E')) return seqRatio > 0.50 ? 7.2 : 14.0;
       if (r.startsWith('S')) return 3.7;
       if (r.startsWith('NA')) return 40.0;
@@ -520,11 +526,11 @@
         return 12.3;
       }
 
-      if (seqRatio > 0.70) return 4.4;
+      if (seqRatio > 0.70) return 4.8;
       return 6.4;
     }
 
-    // MULTI-SCHEMA CSDI / OPEN DATA FARE LOOKUP ENGINE
+    // SECTION FARE ENGINE USING CSDI / HK OPEN FARE DATASETS
     function getStopFare(routeNum, dir, kmbStopId, ctbStopId, kmbSeq, ctbSeq, displaySeq, totalStops) {
       if (!routeNum) return estimateFareByRule(routeNum, displaySeq, totalStops);
       
@@ -590,18 +596,18 @@
       return estimateFareByRule(routeNum, displaySeq, totalStops);
     }
 
-    // UNIVERSAL SPECIAL DAY & DIVERSION STOP DETECTOR
-    function checkIsSpecialDayStop(stop, primaryCompany, serviceType) {
+    // STRICT ROUTE-SPECIFIC SPECIAL DAY / DIVERSION STOP CLASSIFIER
+    function checkIsSpecialDayStop(stop, primaryCompany, serviceType, routeNum) {
       const tcName = String(stop.name_tc || '');
       const enName = String(stop.name_en || '');
       const combined = (tcName + ' ' + enName).toLowerCase();
+      const rNum = String(routeNum || '').trim().toUpperCase();
 
-      // Rule 1: Sunday & Public Holiday Diversion / Special Stops
-      // (e.g. Alexandra House, Chater Garden on Des Voeux Rd Central during Chater Rd Pedestrian Zone)
+      // Rule 1: Central Chater Road Pedestrian Zone Rules (Diversions apply to CTB 1, 5B, 10, 11, etc.)
       const isSunPhDiversion = combined.includes('歷山大廈') || combined.includes('alexandra house') ||
                                combined.includes('遮打花園') || combined.includes('chater garden');
 
-      if (isSunPhDiversion) {
+      if (isSunPhDiversion && (rNum === '1' || rNum === '5B' || rNum === '10' || rNum === '11' || rNum === '12' || rNum === '13' || rNum === '15' || rNum === '18' || rNum === '26')) {
         return {
           isSpecial: true,
           badgeType: 'sunAndPh',
@@ -609,11 +615,10 @@
         };
       }
 
-      // Rule 2: Monday to Saturday Regular Stops (Closed on Sundays & Public Holidays due to Chater Rd Pedestrian Zone)
       const isMonSatOnly = combined.includes('遮打道') || combined.includes('chater road') ||
                            (combined.includes('皇后像廣場') && (combined.includes('遮打') || combined.includes('chater')));
 
-      if (isMonSatOnly) {
+      if (isMonSatOnly && (rNum === '1' || rNum === '5B' || rNum === '10' || rNum === '11' || rNum === '12' || rNum === '13' || rNum === '15' || rNum === '18' || rNum === '26')) {
         return {
           isSpecial: true,
           badgeType: 'monToSat',
@@ -621,7 +626,7 @@
         };
       }
 
-      // Rule 3: Explicit KMB / LWB / CTB Special Service Type (service_type > 1 or isSpecialDayStop)
+      // Rule 2: Explicit Special Service Variant (service_type > 1 or isSpecialDayStop)
       if (stop.isSpecialDayStop ||
           ((primaryCompany === 'KMB' || primaryCompany === 'LWB' || stop.specialCompany === 'KMB' || stop.specialCompany === 'LWB') && 
            ((serviceType && String(serviceType) !== '1') || (stop.specialServiceType && String(stop.specialServiceType) !== '1')))) {
@@ -634,26 +639,15 @@
         };
       }
 
-      // Rule 4: General Racecourse / Peak Hour / School Special Run Keywords
-      const generalSpecialRunKeywords = [
-        '沙田馬場', 'sha tin racecourse',
-        '跑馬地馬場', 'happy valley racecourse',
-        '特別班次', '特別日', '特別日子', '特別總站',
-        '晨早特別班', 'special service', 'peak hours only',
-        '學校特別班', 'school special'
-      ];
-
-      for (const kw of generalSpecialRunKeywords) {
-        if (combined.includes(kw.toLowerCase())) {
-          const co = stop.specialCompany || primaryCompany || 'KMB';
-          return {
-            isSpecial: true,
-            badgeType: 'generalSpecial',
-            reasonKey: (co === 'KMB' || co === 'LWB') ? 'specialDayKmb' : 'specialDayGeneric',
-            type: serviceType || '2',
-            company: co
-          };
-        }
+      // Rule 3: Racecourse Special Routes ONLY (Do NOT mark racecourse stops on regular everyday routes)
+      if (isRacecourseDedicatedRoute(rNum)) {
+        return {
+          isSpecial: true,
+          badgeType: 'generalSpecial',
+          reasonKey: 'specialDayGeneric',
+          type: serviceType || '1',
+          company: primaryCompany
+        };
       }
 
       return { isSpecial: false };
@@ -1291,7 +1285,7 @@
         const card = document.createElement('div');
         
         const primaryCo = currentSelectedRoute?.primaryCompany || s.specialCompany || 'CTB';
-        const specEval = checkIsSpecialDayStop(s, primaryCo, s.specialServiceType);
+        const specEval = checkIsSpecialDayStop(s, primaryCo, s.specialServiceType, currentSelectedRoute?.route);
 
         let cardStyle = "bg-white p-3.5 rounded-2xl shadow-sm border transition cursor-pointer flex items-center justify-between ";
         let badgeStyle = "w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0 border ";
